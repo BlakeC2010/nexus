@@ -104,7 +104,7 @@ def _local_find_user_by_email(email):
 def _local_load_user_by_id(uid):
     return _local_load_users().get(uid)
 
-DEFAULT_GOOGLE_CLIENT_ID = "253818541787-cal4ulgrb5otqjj8htg55l8c6gvl750o.apps.googleusercontent.com"
+LEGACY_DEFAULT_GOOGLE_CLIENT_ID = "253818541787-cal4ulgrb5otqjj8htg55l8c6gvl750o.apps.googleusercontent.com"
 
 IGNORED_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules",
                 ".nexus_history", ".nexus_data", "static", "templates"}
@@ -361,6 +361,26 @@ def _load_server_key(provider):
 
 def _load_default_google_key():
     return _load_server_key("google")
+
+def _load_google_client_id_env():
+    val = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    if val:
+        return val
+    ef = WORKSPACE / ".env"
+    if ef.exists():
+        for line in ef.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("GOOGLE_CLIENT_ID="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+def _effective_google_client_id(cfg=None):
+    cfg = cfg or {}
+    return (
+        _load_google_client_id_env()
+        or (cfg.get("google_client_id") or "").strip()
+        or LEGACY_DEFAULT_GOOGLE_CLIENT_ID
+    )
 
 def _get_current_user_plan():
     uid = session.get("user_id")
@@ -1247,7 +1267,7 @@ def auth_google():
         with urllib.request.urlopen(url, timeout=10) as resp:
             info = json.loads(resp.read().decode())
         cfg = _load_oauth()
-        expected_client_id = cfg.get("google_client_id") or DEFAULT_GOOGLE_CLIENT_ID
+        expected_client_id = _effective_google_client_id(cfg)
         if info.get("aud") != expected_client_id:
             return jsonify({"error": "Google token audience mismatch."}), 400
         email = info.get("email")
@@ -1418,7 +1438,7 @@ def save_profile_onboarding():
 @app.route("/api/oauth-config")
 def get_oauth_cfg():
     cfg = _load_oauth()
-    return jsonify({"google_client_id": cfg.get("google_client_id", DEFAULT_GOOGLE_CLIENT_ID),
+    return jsonify({"google_client_id": _effective_google_client_id(cfg),
                     "github_available": False,
                     "apple_available": False})
 
