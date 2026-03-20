@@ -8,6 +8,7 @@ const runningStreams=new Map();
 const artifactStore=[];
 const artifactIndex=new Map();
 const mindMapStore=new Map();
+const chatTodoStore=new Map();
 const uploadedHistory=[];
 const workspaceFileCache=new Map();
 let canvasTabs=[];
@@ -63,7 +64,11 @@ function setChatRunning(chatId,state,meta={}){
 function stopStreaming(){
   if(!curChat)return;
   const run=runningStreams.get(curChat);
-  if(run?.controller)run.controller.abort();
+  if(run?.type==='research'){
+    cancelCurrentResearch();
+  }else if(run?.controller){
+    run.controller.abort();
+  }
 }
 
 function editMsg(btn){
@@ -1557,31 +1562,29 @@ async function sendMessage(){
   pendingFiles=[];renderPF();
   for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
 
-  // ── Auto tool detection ──
+  // ── Research only when explicitly toggled ──
   let useResearch=researchEnabled;
-  if(!useResearch&&!files.length){
-    try{
-      const det=await apiFetch('/api/detect-tools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});
-      const dj=await det.json();
-      if(dj.tool==='research'){
-        useResearch=true;
-        if(dj.confidence==='auto')showToast('Auto-detected research intent — launching Deep Research','info');
-      }
-    }catch(e){/* detection failed, proceed normally */}
-  }
 
   if(useResearch){
     if(files.length){showToast('Deep Research ignores attachments for now.','info');}
+    const planText=window._pendingResearchPlan||null;
+    window._pendingResearchPlan=null;
+    if(!planText){
+      // No plan yet — show the plan modal so user can review before starting
+      document.getElementById('researchQuery').value=text;
+      input.value=text; // keep it in the input
+      openResearchModal();
+      // Auto-trigger plan generation
+      generateResearchPlan();
+      return;
+    }
     setChatRunning(targetChatId,true,{type:'research'});
-    document.getElementById('btnStop').style.display='none';
     const area=document.getElementById('chatArea');
     const msgDiv=document.createElement('div');
     msgDiv.className='msg kairo';
     msgDiv.innerHTML='<div class="lbl">Nexus</div><div class="msg-content"></div>';
     area.appendChild(msgDiv);area.scrollTop=area.scrollHeight;
     const contentEl=msgDiv.querySelector('.msg-content');
-    const planText=window._pendingResearchPlan||null;
-    window._pendingResearchPlan=null;
     try{
       await runDeepResearch(text,contentEl,area,planText);
       await refreshChats();
@@ -1803,15 +1806,147 @@ function addThinking(){
 }
 
 let _canvasBlockId=0;
+function sanitizeMermaidSource(src){
+  // Fix common mindmap issues: unbalanced parens/brackets in node text
+  const lines=src.split('\n');
+  const out=[];
+  for(const line of lines){
+    let l=line;
+    // For mindmap nodes (indented lines that aren't the keyword line)
+    if(/^\s+/.test(l)&&!/^\s*(mindmap|graph|flowchart|classDiagram|sequenceDiagram|stateDiagram|erDiagram|gantt|journey|pie)\b/i.test(l.trim())){
+      // Remove problematic chars in node text that break mermaid mindmap parser
+      // But preserve indentation exactly
+      const indent=l.match(/^(\s*)/)[1];
+      let text=l.slice(indent.length);
+      // Strip shape markers like (...), [...], {{...}}, ((...)) and just use plain text
+      text=text.replace(/^\(+([^)]*)\)+$/,'$1').replace(/^\[+([^\]]*)\]+$/,'$1').replace(/^\{\{([^}]*)\}\}$/,'$1');
+      // Escape remaining problematic chars
+      text=text.replace(/[()[\]{}]/g,' ').replace(/:/g,' -').replace(/"/g,"'");
+      l=indent+text;
+    }
+    out.push(l);
+  }
+  return out.join('\n');
+}
+
+// ─── Inline interactive todo lists ─────────────────
+function renderChatTodoList(listId){
+  const items=chatTodoStore.get(listId)||[];
+  const doneCount=items.filter(i=>i.done).length;
+  const total=items.length;
+  const pct=total?Math.round(doneCount/total*100):0;
+  let html=`<div class="chat-todo" data-list-id="${listId}">`;
+  html+=`<div class="chat-todo-header"><span class="chat-todo-icon">☑</span><span class="chat-todo-title">${doneCount}/${total} completed</span><div class="chat-todo-bar"><div class="chat-todo-bar-fill" style="width:${pct}%"></div></div></div>`;
+  html+=`<div class="chat-todo-items">`;
+  items.forEach(item=>{
+    const checked=item.done?'checked':'';
+    const doneClass=item.done?'done':'';
+    html+=`<div class="chat-todo-row ${doneClass}" data-item-id="${item.id}">`;
+    html+=`<button class="chat-todo-check ${checked}" onclick="toggleChatTodo('${listId}','${item.id}')"><span>${item.done?'✓':''}</span></button>`;
+    html+=`<span class="chat-todo-text" ondblclick="editChatTodo('${listId}','${item.id}',this)">${esc(item.text)}</span>`;
+    html+=`<button class="chat-todo-del" onclick="deleteChatTodo('${listId}','${item.id}')" title="Delete">✕</button>`;
+    html+=`</div>`;
+  });
+  html+=`</div>`;
+  html+=`<div class="chat-todo-footer"><button class="chat-todo-add" onclick="addChatTodo('${listId}')">+ Add task</button></div>`;
+  html+=`</div>`;
+  return html;
+}
+
+function reRenderChatTodo(listId){
+  const el=document.querySelector(`.chat-todo[data-list-id="${listId}"]`);
+  if(!el)return;
+  const tmp=document.createElement('div');
+  tmp.innerHTML=renderChatTodoList(listId);
+  el.replaceWith(tmp.firstElementChild);
+  // Also sync to localStorage productivity state
+  syncChatTodosToStorage(listId);
+}
+
+function syncChatTodosToStorage(listId){
+  const items=chatTodoStore.get(listId)||[];
+  const state=loadProductivityState();
+  // Remove old items from this list, add current ones
+  state.todos=state.todos.filter(t=>!t.id.startsWith(listId));
+  items.forEach(it=>{state.todos.push({id:it.id,text:it.text,done:it.done});});
+  saveProductivityState(state);
+}
+
+function toggleChatTodo(listId,itemId){
+  const items=chatTodoStore.get(listId);
+  if(!items)return;
+  const item=items.find(i=>i.id===itemId);
+  if(!item)return;
+  item.done=!item.done;
+  reRenderChatTodo(listId);
+}
+
+function deleteChatTodo(listId,itemId){
+  const items=chatTodoStore.get(listId);
+  if(!items)return;
+  chatTodoStore.set(listId,items.filter(i=>i.id!==itemId));
+  reRenderChatTodo(listId);
+}
+
+function editChatTodo(listId,itemId,el){
+  const items=chatTodoStore.get(listId);
+  if(!items)return;
+  const item=items.find(i=>i.id===itemId);
+  if(!item)return;
+  const input=document.createElement('input');
+  input.type='text';input.value=item.text;
+  input.className='chat-todo-edit-input';
+  const commit=()=>{
+    const val=input.value.trim();
+    if(val)item.text=val;
+    reRenderChatTodo(listId);
+  };
+  input.onblur=commit;
+  input.onkeydown=e=>{if(e.key==='Enter')commit();if(e.key==='Escape')reRenderChatTodo(listId);};
+  el.textContent='';
+  el.appendChild(input);
+  input.focus();input.select();
+}
+
+function addChatTodo(listId){
+  const items=chatTodoStore.get(listId);
+  if(!items)return;
+  const newId=listId+'_'+Date.now().toString(36);
+  items.push({id:newId,text:'New task',done:false});
+  reRenderChatTodo(listId);
+  // Auto-focus edit on the new item
+  setTimeout(()=>{
+    const row=document.querySelector(`.chat-todo[data-list-id="${listId}"] .chat-todo-row[data-item-id="${newId}"] .chat-todo-text`);
+    if(row)editChatTodo(listId,newId,row);
+  },50);
+}
+
 function fmt(text){
   if(!text)return'';let t=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   let blocks=[];
   t=t.replace(/```mermaid\n([\s\S]*?)```/g,(_,c)=>{
-    const restored=c.replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();
+    let restored=c.replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();
+    // Sanitize mindmap source to fix common syntax issues
+    if(/^\s*mindmap\b/i.test(restored)) restored=sanitizeMermaidSource(restored);
     const mindId='mm_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7);
     const title=inferMindMapTitle(restored,blocks.length+1);
     mindMapStore.set(mindId,{title,source:restored});
     blocks.push(`<div class="mermaid-container" data-mindmap-id="${mindId}"><div class="mermaid-toolbar"><button type="button" onclick="openMindMapCanvas('${mindId}')">Open in Canvas</button><a class="mm-download" href="#" onclick="return false">Download PNG</a></div><pre class="mermaid">${restored}</pre></div>`);
+    return `%%%BLOCK${blocks.length-1}%%%`;
+  });
+  // Interactive todo lists
+  t=t.replace(/```todolist\n([\s\S]*?)```/g,(_,c)=>{
+    const raw=c.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').trim();
+    try{
+      const items=JSON.parse(raw);
+      if(Array.isArray(items)){
+        const listId='tl_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7);
+        chatTodoStore.set(listId,items.map((it,i)=>({id:listId+'_'+i,text:it.text||'',done:!!it.done})));
+        blocks.push(renderChatTodoList(listId));
+        return `%%%BLOCK${blocks.length-1}%%%`;
+      }
+    }catch(e){}
+    blocks.push(`<pre style="background:var(--bg-deep);padding:14px 16px;border-radius:var(--r-sm);overflow-x:auto;font-family:var(--mono);font-size:11.5px;margin:10px 0;border:1px solid var(--border);line-height:1.65"><code>${c}</code></pre>`);
     return `%%%BLOCK${blocks.length-1}%%%`;
   });
   t=t.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>{
@@ -1822,7 +1957,8 @@ function fmt(text){
   });
   // Markdown images: ![alt](url)
   t=t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g,(_,alt,url)=>{
-    blocks.push(`<div style="margin:10px 0"><img src="${url}" alt="${alt.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}" style="max-width:100%;border-radius:var(--r-md);box-shadow:var(--shadow-sm)" loading="lazy" onerror="this.style.display='none'"></div>`);
+    const safeAlt=alt.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+    blocks.push(`<div class="msg-img-wrap"><img src="${url}" alt="${safeAlt}" style="max-width:100%;border-radius:var(--r-md);box-shadow:var(--shadow-sm)" loading="lazy" onerror="this.parentElement.style.display='none'" onclick="openImageLightbox(this.src,this.alt)"><button class="img-expand-btn" onclick="openImageLightbox('${url}','${safeAlt.replace(/'/g,"\\'")}')">⤢</button></div>`);
     return `%%%BLOCK${blocks.length-1}%%%`;
   });
   // Markdown links: [text](url) — but not images (already handled)
@@ -1835,6 +1971,28 @@ function fmt(text){
 }
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+function openImageLightbox(src,alt){
+  let lb=document.getElementById('imgLightbox');
+  if(!lb){
+    lb=document.createElement('div');
+    lb.id='imgLightbox';
+    lb.className='img-lightbox';
+    lb.onclick=e=>{if(e.target===lb)closeImageLightbox()};
+    lb.innerHTML='<div class="img-lb-close" onclick="closeImageLightbox()">\u2715</div><img class="img-lb-img">';
+    document.body.appendChild(lb);
+  }
+  const img=lb.querySelector('img');
+  img.src=src;
+  img.alt=alt||'';
+  lb.classList.add('open');
+  document.body.style.overflow='hidden';
+}
+function closeImageLightbox(){
+  const lb=document.getElementById('imgLightbox');
+  if(lb)lb.classList.remove('open');
+  document.body.style.overflow='';
+}
 
 function inferMindMapTitle(source,fallbackIndex=1){
   const lines=(source||'').split('\n').map(l=>l.trim()).filter(Boolean);
@@ -2166,6 +2324,7 @@ function switchCanvasTab(id){
   renderCanvasTabs();
   updateCanvasStats();
   panel.classList.add('open');
+  document.getElementById('canvasResizer').classList.add('visible');
   editor.focus();
   editor.oninput=()=>{
     tab.content=editor.value;
@@ -2197,7 +2356,75 @@ function openCanvas(content,title,isCode,opts={}){
   else renderCanvasTabs();
 }
 
-function closeCanvas(){document.getElementById('canvasPanel').classList.remove('open')}
+function closeCanvas(){
+  const panel=document.getElementById('canvasPanel');
+  const resizer=document.getElementById('canvasResizer');
+  panel.classList.remove('open');
+  panel.style.width='';
+  resizer.classList.remove('visible');
+}
+
+// ─── Canvas drag-to-resize ────────────────────────
+(function initCanvasResizer(){
+  const resizer=document.getElementById('canvasResizer');
+  if(!resizer)return;
+  let dragging=false,startX=0,startW=0;
+  resizer.addEventListener('mousedown',e=>{
+    const panel=document.getElementById('canvasPanel');
+    if(!panel.classList.contains('open'))return;
+    dragging=true;startX=e.clientX;startW=panel.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.style.cursor='col-resize';
+    document.body.style.userSelect='none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const panel=document.getElementById('canvasPanel');
+    const mainBody=panel.parentElement;
+    const diff=startX-e.clientX;
+    const newW=Math.min(Math.max(startW+diff,280),mainBody.offsetWidth*0.75);
+    panel.style.width=newW+'px';
+    panel.style.transition='none';
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!dragging)return;
+    dragging=false;
+    const panel=document.getElementById('canvasPanel');
+    const resizer=document.getElementById('canvasResizer');
+    resizer.classList.remove('dragging');
+    document.body.style.cursor='';
+    document.body.style.userSelect='';
+    panel.style.transition='';
+  });
+  // Touch support
+  resizer.addEventListener('touchstart',e=>{
+    const panel=document.getElementById('canvasPanel');
+    if(!panel.classList.contains('open'))return;
+    const t=e.touches[0];
+    dragging=true;startX=t.clientX;startW=panel.offsetWidth;
+    resizer.classList.add('dragging');
+    e.preventDefault();
+  },{passive:false});
+  document.addEventListener('touchmove',e=>{
+    if(!dragging)return;
+    const panel=document.getElementById('canvasPanel');
+    const mainBody=panel.parentElement;
+    const t=e.touches[0];
+    const diff=startX-t.clientX;
+    const newW=Math.min(Math.max(startW+diff,280),mainBody.offsetWidth*0.75);
+    panel.style.width=newW+'px';
+    panel.style.transition='none';
+  },{passive:false});
+  document.addEventListener('touchend',()=>{
+    if(!dragging)return;
+    dragging=false;
+    const panel=document.getElementById('canvasPanel');
+    const resizer=document.getElementById('canvasResizer');
+    resizer.classList.remove('dragging');
+    panel.style.transition='';
+  });
+})();
 
 function copyCanvas(){
   const text=document.getElementById('canvasEditor').value;
@@ -2301,7 +2528,45 @@ function mermaidSvgToPngDataUrl(svgEl,scale=2){
 async function enhanceMermaidDiagrams(){
   const containers=[...document.querySelectorAll('.mermaid-container')];
   for(const container of containers){
+    // Check for mermaid parse errors and try to recover
+    const errEl=container.querySelector('[id*="mermaid-error"],.error-icon,.error-text,p');
     const svg=container.querySelector('svg');
+    if(!svg&&!container.dataset.recovered){
+      // Mermaid failed to render — try re-rendering with aggressive sanitization
+      container.dataset.recovered='1';
+      const pre=container.querySelector('pre.mermaid');
+      if(pre){
+        const mindId=container.getAttribute('data-mindmap-id')||'';
+        const mm=mindMapStore.get(mindId);
+        if(mm?.source){
+          let src=mm.source;
+          // Aggressive cleanup: replace all special chars in non-keyword lines
+          const lines=src.split('\n');
+          const cleanLines=lines.map(l=>{
+            if(/^\s*(mindmap|graph|flowchart|classDiagram|sequenceDiagram|stateDiagram|erDiagram|gantt|journey|pie)\b/i.test(l.trim()))return l;
+            if(/^\s*$/.test(l))return l;
+            // Keep indentation, strip all non-alpha from text
+            const indent=l.match(/^(\s*)/)[1];
+            let text=l.slice(indent.length);
+            text=text.replace(/[^a-zA-Z0-9\s\-_.,&]/g,' ').replace(/\s+/g,' ').trim();
+            return indent+text;
+          });
+          const cleanSrc=cleanLines.join('\n');
+          try{
+            const id='mm_retry_'+Date.now().toString(36);
+            const{svg:svgStr}=await mermaid.render(id,cleanSrc);
+            pre.innerHTML=svgStr;
+            pre.classList.remove('mermaid');
+            mm.source=cleanSrc;
+          }catch(e2){
+            // Still failed — show source as text fallback
+            pre.innerHTML='<div style="padding:16px;font-size:12px;color:var(--text-muted);white-space:pre-wrap;font-family:var(--mono)">'+mm.source.replace(/</g,'&lt;')+'</div>';
+            pre.classList.remove('mermaid');
+          }
+          continue;
+        }
+      }
+    }
     if(!svg)continue;
     const mindId=container.getAttribute('data-mindmap-id')||'';
     const mm=mindMapStore.get(mindId);

@@ -848,8 +848,23 @@ Option B text
 12. Tool mode prefixes — the user may start a message with a tool prefix:
 - [Use Canvas]: Put ALL code or document content in a single ```language code block so it opens in the side canvas editor. Do NOT add explanation around the code — just the code block with a brief intro line.
 - [Search the web]: Reference your knowledge or provide the most current info available, citing sources when possible.
-- [Create a mind map]: Immediately generate a ```mermaid mindmap block for the topic. Do not ask for the topic — use whatever subject is most relevant from context or the message. If the message says "about a topic I choose" just pick the most interesting topic you know about.
+- [Create a mind map]: Immediately generate a ```mermaid mindmap block for the topic. Do not ask for the topic — use whatever subject is most relevant from context or the message. If the message says "about a topic I choose" just pick the most interesting topic you know about. IMPORTANT: In mermaid mindmap syntax, use ONLY plain alphanumeric text for node labels. Do NOT use parentheses (), brackets [], braces {{}}, colons :, or quotes in node text. Keep node labels short (under 40 chars). Use only indentation to define hierarchy. Example:
+```mermaid
+mindmap
+  root Topic Name
+    Branch One
+      Detail A
+      Detail B
+    Branch Two
+      Detail C
+```
 - [Summarize]: Provide a concise summary.
+
+13. Interactive Todo Lists — whenever the user asks for a to-do list, task list, checklist, or you think a to-do list would be useful, output one using this format:
+```todolist
+[{{"text":"First task","done":false}},{{"text":"Second task","done":true}},{{"text":"Third task","done":false}}]
+```
+Each item needs "text" (string) and "done" (boolean). The user will be able to check off, edit, and delete items interactively right in the chat. Use this format any time tasks/checklists are relevant. If the user says they completed something, you can output an updated list with done:true on the completed items.
 
 File operations format:
 <<<FILE_CREATE: path/to/file.md>>>
@@ -2702,20 +2717,36 @@ KEY_TERMS:
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 3: Source Content Extraction
+        # STEP 3: Source Content Extraction  (parallel)
         # ══════════════════════════════════════════════════════════════
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         fetched = []
         fetch_total = min(len(all_results), depth_cfg["max_fetch"])
-        for idx, result in enumerate(all_results[:fetch_total]):
+        to_fetch = all_results[:fetch_total]
+        push("progress", step="reading", pct=28, total_steps=total_steps, current_step=3,
+             message=f"Reading {fetch_total} sources in parallel...")
+
+        def _fetch_one(result):
             if is_cancelled():
-                push("cancelled"); job["status"] = "cancelled"; return
-            url = result["url"]
-            pct = 27 + int(((idx + 1) / fetch_total) * 13)
-            push("progress", step="reading", pct=min(pct, 40), total_steps=total_steps, current_step=3,
-                 message=f"Reading source [{idx+1}/{fetch_total}]: {result.get('title', url)[:60]}...")
-            text = _fetch_url_text(url)
-            if text and len(text) > 150:
-                fetched.append({**result, "text": text})
+                return None
+            return (result, _fetch_url_text(result["url"], timeout=10))
+
+        done_count = 0
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_one, r): r for r in to_fetch}
+            for future in as_completed(futures):
+                if is_cancelled():
+                    push("cancelled"); job["status"] = "cancelled"; return
+                pair = future.result()
+                if pair:
+                    result, text = pair
+                    if text and len(text) > 150:
+                        fetched.append({**result, "text": text})
+                done_count += 1
+                if done_count % 5 == 0 or done_count == fetch_total:
+                    pct = 27 + int((done_count / fetch_total) * 13)
+                    push("progress", step="reading", pct=min(pct, 40), total_steps=total_steps, current_step=3,
+                         message=f"Read {done_count}/{fetch_total} sources ({len(fetched)} extracted)...")
 
         # Fall back to snippets if fetching yielded little
         if len(fetched) < 3:

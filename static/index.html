@@ -100,36 +100,72 @@
     </div>
   </div>
 
-  <div class="chat-area" id="chatArea"></div>
+  <div class="main-body">
+    <div class="chat-col">
+      <div class="chat-area" id="chatArea"></div>
 
-  <!-- ── Command Bar ── -->
-  <div class="input-area">
-    <div class="file-preview" id="filePreview"></div>
-    <div class="input-suggestions" id="inputSuggestions" style="display:none"></div>
-    <div class="input-row">
-      <div class="plus-menu-wrap">
-        <button class="plus-btn" id="plusBtn" onclick="togglePlusMenu()" title="Tools & attachments">+</button>
-        <div class="plus-popup" id="plusPopup">
-          <div class="plus-header">Attach</div>
-          <div class="plus-item" onclick="document.getElementById('fileInput').click();closePlusMenu()"><span class="pi-icon">📎</span><span class="pi-label">Upload file</span></div>
-          <div class="plus-divider"></div>
-          <div class="plus-header">Modes</div>
-          <div class="plus-item plus-toggle" id="thinkMenuItem" onclick="toggleThinking();closePlusMenu()"><span class="pi-icon">🧠</span><span class="pi-label">Thinking</span><span class="pi-badge" id="thinkMenuBadge">OFF</span></div>
-          <div class="plus-item plus-toggle" id="researchMenuItem" onclick="toggleResearch();closePlusMenu()"><span class="pi-icon">🧪</span><span class="pi-label">Research</span><span class="pi-badge" id="researchMenuBadge">OFF</span></div>
-          <div class="plus-divider"></div>
-          <div class="plus-header">Tools</div>
-          <div class="plus-item" onclick="activateTool('canvas');closePlusMenu()"><span class="pi-icon">✏️</span><span class="pi-label">Canvas</span></div>
-          <div class="plus-item" onclick="activateTool('search');closePlusMenu()"><span class="pi-icon">🔍</span><span class="pi-label">Google Search</span></div>
-          <div class="plus-item" onclick="openResearchModal();closePlusMenu()"><span class="pi-icon">🧪</span><span class="pi-label">Deep Research</span></div>
-          <div class="plus-item disabled" onclick="event.stopPropagation()"><span class="pi-icon">🎨</span><span class="pi-label">Image Generation</span><span class="pi-badge">SOON</span></div>
-          <div class="plus-item" onclick="activateTool('mindmap');closePlusMenu()"><span class="pi-icon">🗺️</span><span class="pi-label">Mind Map</span></div>
+      <!-- ── Command Bar ── -->
+      <div class="input-area">
+        <div class="file-preview" id="filePreview"></div>
+        <div class="input-suggestions" id="inputSuggestions" style="display:none"></div>
+        <div class="input-row">
+          <div class="plus-menu-wrap">
+            <button class="plus-btn" id="plusBtn" onclick="togglePlusMenu()" title="Tools & attachments">+</button>
+            <div class="plus-popup" id="plusPopup">
+              <div class="plus-header">Attach</div>
+              <div class="plus-item" onclick="document.getElementById('fileInput').click();closePlusMenu()"><span class="pi-icon">📎</span><span class="pi-label">Upload file</span></div>
+              <div class="plus-divider"></div>
+              <div class="plus-header">Modes</div>
+              <div class="plus-item plus-toggle" id="thinkMenuItem" onclick="toggleThinking();closePlusMenu()"><span class="pi-icon">🧠</span><span class="pi-label">Thinking</span><span class="pi-badge" id="thinkMenuBadge">OFF</span></div>
+              <div class="plus-item plus-toggle" id="researchMenuItem" onclick="toggleResearch();closePlusMenu()"><span class="pi-icon">🧪</span><span class="pi-label">Research</span><span class="pi-badge" id="researchMenuBadge">OFF</span></div>
+              <div class="plus-divider"></div>
+              <div class="plus-header">Tools</div>
+              <div class="plus-item" onclick="activateTool('canvas');closePlusMenu()"><span class="pi-icon">✏️</span><span class="pi-label">Canvas</span></div>
+              <div class="plus-item" onclick="activateTool('search');closePlusMenu()"><span class="pi-icon">🔍</span><span class="pi-label">Google Search</span></div>
 
+              <div class="plus-item disabled" onclick="event.stopPropagation()"><span class="pi-icon">🎨</span><span class="pi-label">Image Generation</span><span class="pi-badge">SOON</span></div>
+              <div class="plus-item" onclick="activateTool('mindmap');closePlusMenu()"><span class="pi-icon">🗺️</span><span class="pi-label">Mind Map</span></div>
+
+            </div>
+          </div>
+          <input type="file" id="fileInput" multiple onchange="handleFiles(this)">
+          <textarea id="msgInput" placeholder="What do you want to solve?" rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+          <div class="send-stop-wrap">
+            <button class="ib ib-send" id="btnSend" onclick="sendMessage()" title="Send">➤</button>
+            <button class="ib ib-stop" id="btnStop" onclick="stopStreaming()" title="Stop generating" style="display:none">■</button>
+          </div>
         </div>
       </div>
-      <input type="file" id="fileInput" multiple onchange="handleFiles(this)">
-      <textarea id="msgInput" placeholder="What do you want to solve?" rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
-      <button class="ib ib-stop" id="btnStop" onclick="stopStreaming()" title="Stop generating" style="display:none">⏹</button>
-      <button class="ib ib-send" id="btnSend" onclick="sendMessage()" title="Send">➤</button>
+    </div>
+    <div class="canvas-resizer" id="canvasResizer"></div>
+    <div class="canvas-panel" id="canvasPanel">
+      <div class="canvas-head">
+        <div class="ch-left">
+          <span class="ch-title" id="canvasTitle">Document</span>
+          <span class="ch-mode" id="canvasMode">PROSE</span>
+        </div>
+        <div class="ch-actions">
+          <button class="ch-btn" onclick="copyCanvas()" title="Copy">📋 Copy</button>
+          <button class="ch-btn" onclick="downloadCanvas()" title="Download">💾 Save</button>
+          <button class="ch-btn" onclick="sendCanvasToAI()" title="Ask AI to edit">✨ AI Edit</button>
+          <button class="ch-btn" onclick="closeCanvas()" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="canvas-body">
+        <div class="canvas-tabs" id="canvasTabs"></div>
+        <textarea class="canvas-editor" id="canvasEditor" placeholder="Start writing or paste content here..." spellcheck="true"></textarea>
+      </div>
+      <div class="canvas-ai-bar">
+        <input type="text" id="canvasAiInput" placeholder="Ask AI to edit this document..." onkeydown="if(event.key==='Enter')canvasAiEdit()">
+        <button onclick="canvasAiEdit()">Apply</button>
+      </div>
+      <div class="canvas-footer">
+        <div class="cf-info">
+          <span id="canvasLines">0 lines</span>
+          <span id="canvasChars">0 chars</span>
+        </div>
+        <span id="canvasStatus">Ready</span>
+      </div>
     </div>
   </div>
 </div>
@@ -413,37 +449,6 @@
     <div id="hubWorkspace" class="hub-list"></div>
   </div>
 </div>
-</div>
-
-<!-- Canvas Panel -->
-<div class="canvas-panel" id="canvasPanel">
-  <div class="canvas-head">
-    <div class="ch-left">
-      <span class="ch-title" id="canvasTitle">Document</span>
-      <span class="ch-mode" id="canvasMode">PROSE</span>
-    </div>
-    <div class="ch-actions">
-      <button class="ch-btn" onclick="copyCanvas()" title="Copy">📋 Copy</button>
-      <button class="ch-btn" onclick="downloadCanvas()" title="Download">💾 Save</button>
-      <button class="ch-btn" onclick="sendCanvasToAI()" title="Ask AI to edit">✨ AI Edit</button>
-      <button class="ch-btn" onclick="closeCanvas()" title="Close">✕</button>
-    </div>
-  </div>
-  <div class="canvas-body">
-    <div class="canvas-tabs" id="canvasTabs"></div>
-    <textarea class="canvas-editor" id="canvasEditor" placeholder="Start writing or paste content here..." spellcheck="true"></textarea>
-  </div>
-  <div class="canvas-ai-bar">
-    <input type="text" id="canvasAiInput" placeholder="Ask AI to edit this document..." onkeydown="if(event.key==='Enter')canvasAiEdit()">
-    <button onclick="canvasAiEdit()">Apply</button>
-  </div>
-  <div class="canvas-footer">
-    <div class="cf-info">
-      <span id="canvasLines">0 lines</span>
-      <span id="canvasChars">0 chars</span>
-    </div>
-    <span id="canvasStatus">Ready</span>
-  </div>
 </div>
 
 <script src="/static/script.js?v=__CACHE_BUST__"></script>
