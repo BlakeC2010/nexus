@@ -783,6 +783,11 @@ async function renameChat(id){
 }
 
 async function createChat(folder=''){
+  if(!curChat && !folder){
+    loadWelcome(true);
+    document.getElementById('msgInput').focus();
+    return;
+  }
   pendingFolder='';
   const r=await fetch('/api/chats',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder})});
   const c=await r.json();
@@ -1555,7 +1560,7 @@ async function openSettings(){
   }
   if(curUser)document.getElementById('profileName').value=curUser.name||'';
   renderCalendarStatus();
-  openMemory();openFiles();openData();
+  openMemory();
 }
 
 async function saveKey(p,id){

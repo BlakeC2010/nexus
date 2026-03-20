@@ -123,7 +123,7 @@
           <div class="plus-item" onclick="openResearchModal();closePlusMenu()"><span class="pi-icon">🧪</span><span class="pi-label">Deep Research</span></div>
           <div class="plus-item disabled" onclick="event.stopPropagation()"><span class="pi-icon">🎨</span><span class="pi-label">Image Generation</span><span class="pi-badge">SOON</span></div>
           <div class="plus-item" onclick="activateTool('mindmap');closePlusMenu()"><span class="pi-icon">🗺️</span><span class="pi-label">Mind Map</span></div>
-          <div class="plus-item" onclick="openProductivityHub();closePlusMenu()"><span class="pi-icon">✅</span><span class="pi-label">Productivity Hub</span></div>
+
         </div>
       </div>
       <input type="file" id="fileInput" multiple onchange="handleFiles(this)">
@@ -147,18 +147,7 @@
     <p class="st">🧠 Memory</p>
     <p class="hint">Facts here are included in every chat. Nexus can also add them when you say "remember that..."</p>
     <div class="mem-list" id="memList"></div>
-    <hr>
-    <p class="st">📂 Files</p>
-    <p class="hint">Your uploaded documents and files.</p>
-    <div id="filesList"></div>
-    <hr>
-    <p class="st">📊 Data & Stats</p>
-    <div id="dataInfo"></div>
-    <div class="data-stat" id="dataStats"></div>
-    <p style="margin-top:12px;font-size:11px;color:var(--text-secondary)"><strong>Memory Facts:</strong></p>
-    <div id="dataMemory" style="font-size:11px;color:var(--text-muted)"></div>
-    <p style="margin-top:12px;font-size:11px;color:var(--text-secondary)"><strong>Chat History:</strong></p>
-    <div id="dataChats" style="font-size:11px;color:var(--text-muted)"></div>
+
     <hr>
     <p class="st">👤 Profile</p>
     <label>Display Name</label>
@@ -385,40 +374,6 @@
     <p class="st">Workspace Files</p>
     <p class="hint">Project files available to Nexus.</p>
     <div id="hubWorkspace" class="hub-list"></div>
-  </div>
-</div>
-</div>
-
-<!-- Productivity Hub -->
-<div class="ov" id="productivityModal">
-<div class="modal" style="width:760px;max-width:95vw">
-  <div class="mh"><h3>✅ Productivity Hub</h3><button class="mx" onclick="closeM('productivityModal')">✕</button></div>
-  <div class="mb">
-    <div class="prod-grid">
-      <div class="prod-card">
-        <p class="st">Today Todo List</p>
-        <p class="hint">Capture tasks, then check them off as you go.</p>
-        <div class="kr" style="margin-top:8px"><input type="text" id="todoInput" placeholder="Add a task..." onkeydown="if(event.key==='Enter')addTodoItem()"><button onclick="addTodoItem()">Add</button></div>
-        <div class="todo-list" id="todoList"></div>
-      </div>
-      <div class="prod-card">
-        <p class="st">Vision Board</p>
-        <p class="hint">Track your big goals and convert them into next actions.</p>
-        <label style="margin-top:8px">Goal</label>
-        <input type="text" id="visionTitle" placeholder="Launch my MVP">
-        <label>Target date (optional)</label>
-        <input type="text" id="visionWhen" placeholder="June 2026">
-        <div class="kr" style="margin-top:8px"><button onclick="addVisionItem()">Add Card</button></div>
-        <div class="vision-list" id="visionList"></div>
-      </div>
-    </div>
-    <hr>
-    <p class="st">Quick Productivity Launchers</p>
-    <div class="prod-launchers">
-      <button onclick="insertProductivityPrompt('day')">Plan My Day</button>
-      <button onclick="insertProductivityPrompt('week')">Plan My Week</button>
-      <button onclick="insertProductivityPrompt('focus')">Start Focus Sprint</button>
-    </div>
   </div>
 </div>
 </div>

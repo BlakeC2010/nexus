@@ -143,6 +143,10 @@ def _ensure_dirs():
 
 def _get_secret():
     _ensure_dirs()
+    # Use environment variable if set (survives Render deploys).
+    env_key = os.environ.get("NEXUS_SECRET_KEY", "").strip()
+    if env_key:
+        return env_key
     # Prefer a workspace-level secret so auth survives data-folder cleanup.
     if SESSION_SECRET_FILE.exists():
         key = SESSION_SECRET_FILE.read_text(encoding="utf-8").strip()
@@ -226,7 +230,7 @@ def create_user(email, pw, name="", provider="local"):
     h, s = _hash_pw(pw) if pw else ("", "")
     user = {"id": uid, "email": email.lower(), "name": name or email.split("@")[0],
             "password_hash": h, "salt": s, "provider": provider,
-            "created": datetime.datetime.now().isoformat(), "theme": "dark", "plan": "free"}
+            "created": datetime.date.today().isoformat(), "theme": "dark", "plan": "free"}
     _save_user(user)
     return user, None
 
@@ -243,7 +247,7 @@ def oauth_user(email, name, provider):
     uid = str(uuid.uuid4())[:12]
     user = {"id": uid, "email": email.lower(), "name": name or email.split("@")[0],
             "password_hash": "", "salt": "", "provider": provider,
-            "created": datetime.datetime.now().isoformat(), "theme": "dark", "plan": "free"}
+            "created": datetime.date.today().isoformat(), "theme": "dark", "plan": "free"}
     _save_user(user)
     return user
 
