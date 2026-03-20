@@ -168,7 +168,19 @@
     <p class="st">👤 Profile</p>
     <label>Display Name</label>
     <div class="kr"><input type="text" id="profileName" placeholder="Your name"><button onclick="saveName()">Save</button></div>
+    <label style="margin-top:10px">Why did you build Nexus?</label>
+    <textarea id="profileOrigin" maxlength="500" placeholder="Example: My brother sent me AI stuff, and it inspired me to build this."></textarea>
+    <div class="kr" style="margin-top:8px"><button onclick="saveProfileContext()">Save Creator Context</button></div>
     <div class="kr" style="margin-top:8px"><button onclick="openSetupFromSettings()">Open Setup Wizard</button></div>
+    <hr>
+    <p class="st">📅 Google Calendar</p>
+    <p class="hint">Connect your Google Calendar so upcoming events can appear on your homepage widgets.</p>
+    <div class="kr" style="margin-top:8px">
+      <button id="calendarConnectBtn" onclick="connectGoogleCalendar()">Connect Calendar</button>
+      <button id="calendarDisconnectBtn" onclick="disconnectGoogleCalendar()">Disconnect</button>
+      <button onclick="refreshGoogleCalendarEvents()">Refresh Events</button>
+    </div>
+    <p class="hint" id="calendarStatus" style="margin-top:6px">Calendar not connected.</p>
     <hr>
     <p class="st">🎨 Appearance</p>
     <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">

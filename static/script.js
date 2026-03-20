@@ -17,6 +17,10 @@ let _thinkInterval=null;
 const ONB_SKIP_KEY='nexus_onboarding_skipped';
 const ONB_NO_REMIND_KEY='nexus_onboarding_no_remind';
 const ONB_DISMISS_KEY='nexus_onboarding_reminder_dismissed';
+const CALENDAR_STATE_KEY='nexus_calendar_state_v1';
+let calendarToken='';
+let calendarTokenClient=null;
+let calendarEvents=[];
 
 function startThinkingPhrases(el){
   let i=0;
@@ -254,6 +258,8 @@ function setDraft(text){
 async function showApp(){
   document.getElementById('loginPage').style.display='none';
   document.getElementById('appPage').classList.add('visible');
+  await ensureOAuthConfigLoaded();
+  loadCalendarState();
   updateUserUI(); await loadModels(); await refreshChats();
   if(!curChat){ loadWelcome(); }
   updateComposerBusyUI();
@@ -261,42 +267,78 @@ async function showApp(){
   if(!isGuest){ await ensureOnboarding(); }
 }
 
-function getWelcomeHTML(greeting){
-  const h=new Date().getHours();
-  const g=h<12?'morning':h<17?'afternoon':'evening';
-  const name=curUser?.name||'there';
-  const displayGreeting=greeting!==undefined?greeting:`Good ${g}, ${name}.`;
+async function ensureOAuthConfigLoaded(){
+  if(googleClientId)return;
+  try{
+    const o=await fetch('/api/oauth-config').then(r=>r.json());
+    googleClientId=o.google_client_id||'';
+  }catch{}
+}
 
-  const recent=allChats.filter(c=>(c.message_count||0)>0).slice(0,4);
-  const recentItems=recent.length>0
-    ?recent.map(c=>`<div class="wl-recent-item" onclick="openChat('${c.id}')"><span class="wl-ri-title">${esc(c.title)}</span></div>`).join('')
-    :`<div class="wl-empty">No chats yet — start one below.</div>`;
-  const allBtn=recent.length>0?`<button class="wl-all-btn" onclick="document.getElementById('chatSearch').focus()">View all chats →</button>`:'';
+function normalizeMasterPrompt(text){
+  return (text||'').replace(/\s+/g,' ').trim();
+}
 
-  const actions=[
-    {icon:'⚡',label:'Plan my day',q:'Help me organize and prioritize everything on my plate today'},
-    {icon:'✍',label:'Help me write',q:'Help me write or polish something'},
-    {icon:'💡',label:'Brainstorm',q:'Brainstorm ideas with me for a project or problem'},
-    {icon:'🔍',label:'Research & analyze',q:'Help me analyze or research a topic in depth'}
+function getMasterPrompts(){
+  return [
+    {icon:'⚡',label:'Plan my day',q:'Help me organize and prioritize everything on my plate today. Ask me 2 quick clarifying questions before building the plan.'},
+    {icon:'✍',label:'Help me write',q:'Help me write or polish something. Start by asking what audience, tone, and outcome I want.'},
+    {icon:'💡',label:'Brainstorm',q:'Brainstorm ideas with me for a project or problem. Push for novel options, then rank the top 3.'},
+    {icon:'🔍',label:'Research & analyze',q:'Help me research this topic deeply. Outline the scope first, then suggest a strong investigation path.'}
   ];
-  const actionCards=actions.map(a=>`<div class="wl-action-card" onclick="sendQ('${a.q.replace(/'/g,"\\'")}')"><span class="wl-ac-icon">${a.icon}</span><span class="wl-ac-label">${a.label}</span></div>`).join('');
+}
+
+function buildMasterPromptCards(){
+  return getMasterPrompts().map(a=>`<div class="wl-action-card" onclick="fillMasterPrompt('${a.q.replace(/'/g,"\\'")}')"><span class="wl-ac-icon">${a.icon}</span><span class="wl-ac-label">${a.label}</span><span class="wl-ac-sub">Editable master prompt</span></div>`).join('');
+}
+
+function renderHomeWidget(w){
+  const type=(w?.type||'focus').toLowerCase();
+  const size=(w?.size||'medium').toLowerCase();
+  const title=esc(w?.title||'Widget');
+  const subtitle=w?.subtitle?`<div class="wl-widget-sub">${esc(w.subtitle)}</div>`:'';
+  const cls=`wl-widget wl-size-${size}`;
+
+  if(type==='recent'){
+    const items=Array.isArray(w.items)?w.items:[];
+    const body=items.length?items.map(i=>`<div class="wl-recent-item" onclick="openChat('${esc(i.id||'')}')"><span class="wl-ri-title">${esc(i.title||'Untitled')}</span></div>`).join(''):'<div class="wl-empty">No recent chats yet.</div>';
+    return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-recent-list">${body}</div></div>`;
+  }
+  if(type==='calendar'){
+    const items=Array.isArray(w.items)?w.items:[];
+    const body=items.length?items.map(i=>`<div class="wl-cal-item"><div class="wl-cal-title">${esc(i.summary||'Untitled event')}</div><div class="wl-cal-time">${esc(i.when||'Upcoming')}</div></div>`).join(''):'<div class="wl-empty">Connect Google Calendar to show upcoming events.</div>';
+    return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-cal-list">${body}</div></div>`;
+  }
+  if(type==='todos'){
+    const items=Array.isArray(w.items)?w.items:[];
+    const body=items.length?items.map(i=>`<div class="wl-todo-item">${i.done?'✓':'○'} ${esc(i.text||'')}</div>`).join(''):'<div class="wl-empty">No todos yet. Add one in Productivity Hub.</div>';
+    return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-todo-list">${body}</div></div>`;
+  }
+  if(type==='vision'){
+    const text=esc(w?.text||'Set a meaningful target and break it into action.');
+    const meta=w?.meta?`<div class="wl-vision-meta">${esc(w.meta)}</div>`:'';
+    return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-vision-main">${text}</div>${meta}</div>`;
+  }
+  if(type==='motivation'){
+    return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-focus-copy">${esc(w?.text||'Momentum first. Start with the smallest next action.')}</div></div>`;
+  }
+  return `<div class="${cls}"><div class="wl-widget-hd">${title}</div>${subtitle}<div class="wl-focus-copy">${esc(w?.text||'Ready when you are.')}</div></div>`;
+}
+
+function getWelcomeHTML(greeting,homePlan){
+  const displayGreeting=greeting!==undefined?greeting:getLocalTimeGreeting();
+  const heading=homePlan?.heading?esc(homePlan.heading):'What would you like to work on?';
+  const aiWidgets=Array.isArray(homePlan?.widgets)?homePlan.widgets:[];
+  const widgetCards=aiWidgets.length
+    ?aiWidgets.map(renderHomeWidget).join('')
+    :`<div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Start something</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
 
   return `<div class="welcome">
     <div class="wl-hero">
       <h1 class="welcome-greeting">${displayGreeting}</h1>
-      <p class="welcome-sub">What would you like to work on?</p>
+      <p class="welcome-sub">${heading}</p>
     </div>
-    <div class="wl-grid">
-      <div class="wl-widget">
-        <div class="wl-widget-hd">Recent</div>
-        <div class="wl-recent-list">${recentItems}</div>
-        ${allBtn}
-      </div>
-      <div class="wl-widget">
-        <div class="wl-widget-hd">Start something</div>
-        <div class="wl-action-grid">${actionCards}</div>
-      </div>
-    </div>
+    <div class="wl-grid">${widgetCards}<div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div></div>
   </div>`;
 }
 
@@ -342,9 +384,30 @@ async function loadWelcome(force=false){
   const area=document.getElementById('chatArea');
   if(curChat&&!force)return;
   const greeting=getLocalTimeGreeting();
-  area.innerHTML=getWelcomeHTML('\u200b');
+  const plan=await fetchHomeWidgetsPlan();
+  area.innerHTML=getWelcomeHTML('\u200b',plan);
   const greetEl=area.querySelector('.welcome-greeting');
   if(greetEl)typewriterEffect(greetEl,greeting);
+}
+
+async function fetchHomeWidgetsPlan(){
+  const state=loadProductivityState();
+  const payload={
+    todos:(state.todos||[]).slice(0,10),
+    visions:(state.visions||[]).slice(0,6),
+    calendar_events:(calendarEvents||[]).slice(0,8),
+  };
+  try{
+    const r=await fetch('/api/home-widgets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await r.json();
+    return d||{};
+  }catch{
+    return {};
+  }
+}
+
+function fillMasterPrompt(text){
+  setDraft(normalizeMasterPrompt(text));
 }
 
 function updateUserUI(){
@@ -1316,6 +1379,12 @@ async function openSettings(){
     light.style.cssText=(theme==='light'?activeStyle:inactiveStyle)+'padding:7px 14px;font-size:11px;font-weight:500;border:none;cursor:pointer;transition:all .2s;';
   }
   if(curUser)document.getElementById('profileName').value=curUser.name||'';
+  try{
+    const r=await fetch('/api/profile-onboarding');
+    const d=await r.json();
+    document.getElementById('profileOrigin').value=d?.profile?.origin_story||'';
+  }catch{}
+  renderCalendarStatus();
   openMemory();openFiles();openData();
 }
 
@@ -1359,6 +1428,119 @@ async function saveName(){
   await fetch('/api/auth/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
   curUser.name=name;updateUserUI();
   showToast('Profile updated.','success');
+}
+
+async function saveProfileContext(){
+  const origin=(document.getElementById('profileOrigin')?.value||'').trim();
+  try{
+    const r=await fetch('/api/profile-onboarding');
+    const d=await r.json();
+    const p=d.profile||{};
+    const payload={
+      preferred_name:(p.preferred_name||curUser?.name||'').trim(),
+      what_you_do:(p.what_you_do||'builder').trim(),
+      hobbies:(p.hobbies||'technology').trim(),
+      current_focus:(p.current_focus||'').trim(),
+      origin_story:origin,
+    };
+    if(!payload.preferred_name||!payload.what_you_do||!payload.hobbies){
+      showToast('Complete quick setup first, then save creator context.','info');
+      return;
+    }
+    const s=await fetch('/api/profile-onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const out=await s.json();
+    if(out.error){showToast(out.error,'error');return;}
+    showToast('Creator context saved. Nexus will use this in chats.','success');
+  }catch{
+    showToast('Could not save creator context.','error');
+  }
+}
+
+function loadCalendarState(){
+  try{
+    const raw=localStorage.getItem(CALENDAR_STATE_KEY);
+    if(!raw)return;
+    const parsed=JSON.parse(raw);
+    calendarEvents=Array.isArray(parsed.events)?parsed.events:[];
+  }catch{
+    calendarEvents=[];
+  }
+}
+
+function saveCalendarState(){
+  const safe={events:(calendarEvents||[]).slice(0,8)};
+  localStorage.setItem(CALENDAR_STATE_KEY,JSON.stringify(safe));
+}
+
+function renderCalendarStatus(){
+  const statusEl=document.getElementById('calendarStatus');
+  const cBtn=document.getElementById('calendarConnectBtn');
+  const dBtn=document.getElementById('calendarDisconnectBtn');
+  if(statusEl){
+    if(calendarToken)statusEl.textContent=`Calendar connected. Showing ${calendarEvents.length} upcoming events.`;
+    else if(calendarEvents.length)statusEl.textContent=`Calendar events cached (${calendarEvents.length}). Reconnect to refresh.`;
+    else statusEl.textContent='Calendar not connected.';
+  }
+  if(cBtn)cBtn.disabled=!!calendarToken;
+  if(dBtn)dBtn.disabled=!calendarToken;
+}
+
+function connectGoogleCalendar(){
+  ensureOAuthConfigLoaded().then(()=>{
+    if(!googleClientId){showToast('Google client ID is missing.','error');return;}
+    if(!window.google?.accounts?.oauth2){showToast('Google OAuth is not available yet.','error');return;}
+    if(!calendarTokenClient){
+      calendarTokenClient=google.accounts.oauth2.initTokenClient({
+        client_id:googleClientId,
+        scope:'https://www.googleapis.com/auth/calendar.readonly',
+        callback:(resp)=>{
+          if(resp?.error){showToast('Calendar connect failed.','error');return;}
+          calendarToken=resp.access_token||'';
+          renderCalendarStatus();
+          refreshGoogleCalendarEvents();
+        }
+      });
+    }
+    calendarTokenClient.requestAccessToken({prompt:'consent'});
+  });
+}
+
+function disconnectGoogleCalendar(){
+  calendarToken='';
+  calendarEvents=[];
+  saveCalendarState();
+  renderCalendarStatus();
+  loadWelcome(true);
+  showToast('Calendar disconnected.','info');
+}
+
+async function refreshGoogleCalendarEvents(){
+  if(!calendarToken){showToast('Connect Google Calendar first.','info');return;}
+  try{
+    const timeMin=encodeURIComponent(new Date().toISOString());
+    const url=`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=8&timeMin=${timeMin}`;
+    const r=await fetch(url,{headers:{Authorization:`Bearer ${calendarToken}`}});
+    const d=await r.json();
+    if(!r.ok){
+      showToast(d?.error?.message||'Could not load calendar events.','error');
+      return;
+    }
+    calendarEvents=(d.items||[]).map(ev=>{
+      const start=ev.start?.dateTime||ev.start?.date||'';
+      let when='Upcoming';
+      if(start){
+        const dt=new Date(start);
+        if(!Number.isNaN(dt.getTime()))when=dt.toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+      }
+      return {summary:ev.summary||'Untitled event',when};
+    });
+    saveCalendarState();
+    renderCalendarStatus();
+    if(!curChat)loadWelcome(true);
+    showToast('Calendar events updated.','success');
+  }catch{
+    showToast('Could not load calendar events.','error');
+  }
 }
 
 // ─── Memory ───────────────────────────────────────

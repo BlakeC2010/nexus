@@ -111,6 +111,7 @@ IGNORED_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules",
 IGNORED_FILES = {"nexus.py", "app.py", "requirements.txt", ".env", ".gitignore"}
 MAX_CONTEXT_CHARS = 900_000
 DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_CREATOR_ORIGIN_STORY = "I built Nexus after my brother shared AI ideas that inspired me to create this workspace."
 
 GUEST_MODEL = "gemini-2.5-flash"
 
@@ -481,6 +482,7 @@ def load_profile():
         "what_you_do": "",
         "hobbies": "",
         "current_focus": "",
+        "origin_story": "",
         "updated": None,
     }
     uid = session.get("user_id")
@@ -660,6 +662,25 @@ def build_system_prompt(memory=None):
         mem_section = "\n\n[PERSISTENT MEMORY]\n" + "\n".join(
             f"{i}. {f}" for i, f in enumerate(memory["facts"], 1))
 
+    profile_section = ""
+    try:
+        p = load_profile()
+        lines = []
+        if p.get("preferred_name"):
+            lines.append(f"Preferred name: {p.get('preferred_name')}")
+        if p.get("what_you_do"):
+            lines.append(f"Work: {p.get('what_you_do')}")
+        if p.get("hobbies"):
+            lines.append(f"Hobbies: {p.get('hobbies')}")
+        if p.get("current_focus"):
+            lines.append(f"Current focus: {p.get('current_focus')}")
+        if p.get("origin_story"):
+            lines.append(f"Why they built Nexus: {p.get('origin_story')}")
+        if lines:
+            profile_section = "\n\n[USER PROFILE CONTEXT]\n" + "\n".join(lines)
+    except Exception:
+        profile_section = ""
+
     user = _cur_user()
     uname = user.get("name", "there") if user else "there"
 
@@ -750,6 +771,7 @@ Session Info:
 - Always try to help. Don't refuse unless the request is clearly and unambiguously harmful. Lean toward engaging creatively with unusual, edgy, or unconventional requests — curiosity beats caution. When in doubt, just answer.
 - Never lecture or moralize. If something seems edgy but isn't actually harmful, engage with it directly without caveats or disclaimers.
 {mem_section}
+{profile_section}
 {f"Custom instructions:{chr(10)}{custom}" if custom else ""}"""
 
 
@@ -1058,6 +1080,140 @@ def _summarize_messages(old_messages, resolved):
         return "\n".join(f"- {l}" for l in lines[-6:])
 
 
+def _fallback_home_widgets(user_name, profile, chats, todos, visions, calendar_events):
+    first_name = (user_name or "").split()[0] or "there"
+    heading = f"Welcome back, {first_name}."
+    widgets = []
+
+    # Prefer actionable data first.
+    if calendar_events:
+        widgets.append({
+            "type": "calendar",
+            "size": "large",
+            "title": "Upcoming schedule",
+            "subtitle": "Google Calendar",
+            "items": calendar_events[:4],
+        })
+
+    pending_todos = [t for t in (todos or []) if not t.get("done")]
+    if pending_todos:
+        widgets.append({
+            "type": "todos",
+            "size": "medium",
+            "title": "Priority tasks",
+            "subtitle": f"{len(pending_todos)} open",
+            "items": pending_todos[:5],
+        })
+
+    if chats:
+        widgets.append({
+            "type": "recent",
+            "size": "medium",
+            "title": "Continue where you left off",
+            "items": [{"id": c.get("id"), "title": c.get("title", "Untitled")} for c in chats[:5]],
+        })
+
+    focus = (profile.get("current_focus") or "").strip()
+    if focus:
+        widgets.append({
+            "type": "focus",
+            "size": "small",
+            "title": "Current focus",
+            "text": focus[:180],
+        })
+
+    if visions:
+        v = visions[0]
+        widgets.append({
+            "type": "vision",
+            "size": "small",
+            "title": "Vision target",
+            "text": (v.get("title") or "").strip()[:140],
+            "meta": (v.get("when") or "").strip()[:80],
+        })
+
+    if not widgets:
+        widgets = [{
+            "type": "focus",
+            "size": "large",
+            "title": "Your command center is ready",
+            "text": "Add tasks, connect your calendar, or start a chat to make this dashboard uniquely yours.",
+        }]
+
+    return {"heading": heading, "widgets": widgets[:4]}
+
+
+def _ai_home_widgets(user_name, profile, chats, todos, visions, calendar_events):
+    settings = load_settings()
+    selected = normalize_selected_model(settings)
+    resolved = resolve_chat_model({"model": selected}, settings)
+    if resolved.get("error"):
+        return None
+
+    provider = resolved.get("provider")
+    if provider not in ("google", "openai", "anthropic", "custom"):
+        return None
+
+    payload = {
+        "user_name": user_name,
+        "profile": {
+            "preferred_name": profile.get("preferred_name", ""),
+            "what_you_do": profile.get("what_you_do", ""),
+            "hobbies": profile.get("hobbies", ""),
+            "current_focus": profile.get("current_focus", ""),
+            "origin_story": profile.get("origin_story", ""),
+        },
+        "recent_chats": [{"id": c.get("id"), "title": c.get("title", "Untitled")} for c in chats[:8]],
+        "todos": todos[:10],
+        "visions": visions[:5],
+        "calendar_events": calendar_events[:8],
+    }
+
+    prompt = (
+        "You are designing a dynamic AI homepage dashboard. "
+        "Choose 3 to 5 useful widgets and sizes based on the provided user data. "
+        "Output STRICT JSON only with this schema:\n"
+        "{\n"
+        "  \"heading\": \"string\",\n"
+        "  \"widgets\": [\n"
+        "    {\n"
+        "      \"type\": \"calendar|todos|recent|focus|vision|motivation\",\n"
+        "      \"size\": \"small|medium|large\",\n"
+        "      \"title\": \"string\",\n"
+        "      \"subtitle\": \"string (optional)\",\n"
+        "      \"text\": \"string (optional)\",\n"
+        "      \"items\": []\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Rules: pick practical widgets first, reflect upcoming schedule and todos if present, and keep it concise.\n\n"
+        f"DATA:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+    try:
+        raw = PROVIDERS.get(provider, call_openai)(
+            resolved["api_key"],
+            resolved["actual_model"],
+            "You return clean JSON only.",
+            [{"role": "user", "text": prompt}],
+            base_url=resolved.get("base_url"),
+        )
+        txt = (raw or "").strip()
+        m = re.search(r"\{[\s\S]*\}", txt)
+        if m:
+            txt = m.group(0)
+        out = json.loads(txt)
+        widgets = out.get("widgets") if isinstance(out, dict) else None
+        if not isinstance(widgets, list) or not widgets:
+            return None
+        return {
+            "heading": str(out.get("heading") or f"Welcome back, {(user_name or 'there').split()[0]}.")[:120],
+            "widgets": widgets[:5],
+        }
+    except Exception:
+        return None
+
+
 # ─── Provider Calls ──────────────────────────────────────────────────────────
 
 def call_google(api_key, model, sysprompt, messages, base_url=None, thinking=False, web_search=False, **kwargs):
@@ -1265,6 +1421,9 @@ def auth_me():
     user = _cur_user()
     if not user: session.clear(); return jsonify({"authenticated": False})
     profile = load_profile()
+    if not (profile.get("origin_story") or "").strip():
+        profile["origin_story"] = DEFAULT_CREATOR_ORIGIN_STORY
+        save_profile(profile)
     return jsonify({"authenticated": True, "user": {
         "id": user["id"], "email": user["email"], "name": user["name"],
         "theme": user.get("theme", "dark"), "provider": user.get("provider", "local"),
@@ -1407,6 +1566,7 @@ def get_profile_onboarding():
             "what_you_do": p.get("what_you_do", ""),
             "hobbies": p.get("hobbies", ""),
             "current_focus": p.get("current_focus", ""),
+            "origin_story": p.get("origin_story", ""),
         },
     })
 
@@ -1418,6 +1578,7 @@ def save_profile_onboarding():
     what_you_do = (d.get("what_you_do") or "").strip()
     hobbies = (d.get("hobbies") or "").strip()
     current_focus = (d.get("current_focus") or "").strip()
+    origin_story = (d.get("origin_story") or "").strip()
 
     if not preferred_name or not what_you_do or not hobbies:
         return jsonify({"error": "Name, what you do, and hobbies are required."}), 400
@@ -1429,6 +1590,7 @@ def save_profile_onboarding():
         "what_you_do": what_you_do[:300],
         "hobbies": hobbies[:300],
         "current_focus": current_focus[:300],
+        "origin_story": origin_story[:500],
     })
     save_profile(profile)
     _save_user_name(profile["preferred_name"])
@@ -1441,6 +1603,8 @@ def save_profile_onboarding():
     facts.append(f"Hobbies: {profile['hobbies']}")
     if profile["current_focus"]:
         facts.append(f"Current focus: {profile['current_focus']}")
+    if profile["origin_story"]:
+        facts.append(f"Why I built Nexus: {profile['origin_story']}")
     mem["facts"] = facts
     save_memory(mem)
 
@@ -1855,6 +2019,36 @@ def get_greeting():
         "evening":    [f"Evening stretch ahead{name_part}.", f"Winding down or diving in{name_part}?", f"Golden hour thoughts{name_part}."],
     }
     return jsonify({"greeting": random.choice(presets.get(period, [f"Ready when you are{name_part}."]))})  
+
+
+@app.route("/api/home-widgets", methods=["POST"])
+@require_auth_or_guest
+def home_widgets_route():
+    body = request.get_json() or {}
+    todos = body.get("todos", []) if isinstance(body.get("todos", []), list) else []
+    visions = body.get("visions", []) if isinstance(body.get("visions", []), list) else []
+    calendar_events = body.get("calendar_events", []) if isinstance(body.get("calendar_events", []), list) else []
+
+    user = _cur_user() or {}
+    profile = load_profile() if session.get("user_id") else {
+        "preferred_name": "",
+        "what_you_do": "",
+        "hobbies": "",
+        "current_focus": "",
+        "origin_story": "",
+    }
+    chats = list_chats() if session.get("user_id") else []
+
+    ai_plan = _ai_home_widgets(
+        user.get("name", ""),
+        profile,
+        chats,
+        todos,
+        visions,
+        calendar_events,
+    )
+    plan = ai_plan or _fallback_home_widgets(user.get("name", ""), profile, chats, todos, visions, calendar_events)
+    return jsonify(plan)
 
 # ─── Deep Research Engine ────────────────────────────────────────────────────
 
