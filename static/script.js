@@ -357,11 +357,7 @@ function getWelcomeHTML(greeting,homePlan){
   }
   
   if(!widgetCards){
-    const recent=allChats.slice(0,5);
-    const recentBody=recent.length
-      ?recent.map(c=>`<div class="wl-recent-item" onclick="openChat('${esc(c.id||'')}')"><span class="wl-ri-title">${esc(c.title||'Untitled')}</span></div>`).join('')
-      :'<div class="wl-empty">No chats yet. Start a new conversation to get rolling.</div>';
-    widgetCards=`<div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Recent chats</div><div class="wl-recent-list">${recentBody}</div></div><div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
+    widgetCards=`<div class="wl-widget wl-size-large"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
   }
 
   return `<div class="welcome">

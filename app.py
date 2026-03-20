@@ -2054,15 +2054,7 @@ def home_widgets_route():
     }
     chats = list_chats() if session.get("user_id") else []
 
-    ai_plan = _ai_home_widgets(
-        user.get("name", ""),
-        profile,
-        chats,
-        todos,
-        visions,
-        calendar_events,
-    )
-    plan = ai_plan or _fallback_home_widgets(user.get("name", ""), profile, chats, todos, visions, calendar_events)
+    plan = _fallback_home_widgets(user.get("name", ""), profile, chats, todos, visions, calendar_events)
     return jsonify(plan)
 
 # ─── Deep Research Engine ────────────────────────────────────────────────────
