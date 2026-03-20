@@ -22,6 +22,8 @@ const HOME_WIDGET_CACHE_KEY='nexus_home_widgets_cache_v1';
 let calendarToken='';
 let calendarTokenClient=null;
 let calendarEvents=[];
+let homeWidgetRefreshTimer=null;
+let homeWidgetRefreshInFlight=false;
 
 function startThinkingPhrases(el){
   let i=0;
@@ -263,6 +265,7 @@ async function showApp(){
   loadCalendarState();
   updateUserUI(); await loadModels(); await refreshChats();
   if(!curChat){ loadWelcome(); }
+  startHomeWidgetPrecomputeLoop();
   updateComposerBusyUI();
   document.getElementById('msgInput').focus();
   if(!isGuest){ await ensureOnboarding(); }
@@ -390,6 +393,44 @@ function saveCachedHomePlan(plan){
   try{localStorage.setItem(HOME_WIDGET_CACHE_KEY,JSON.stringify(plan||{}));}catch{}
 }
 
+function hasCachedHomePlan(){
+  const plan=loadCachedHomePlan();
+  if(!plan||typeof plan!=='object')return false;
+  return !!(plan.heading||Array.isArray(plan.widgets));
+}
+
+function isWelcomeScreenVisible(){
+  const area=document.getElementById('chatArea');
+  return !!area?.querySelector('.welcome');
+}
+
+async function precomputeHomeWidgets(allowLiveApply=true,greeting=''){
+  if(homeWidgetRefreshInFlight)return;
+  homeWidgetRefreshInFlight=true;
+  try{
+    const plan=await fetchHomeWidgetsPlan();
+    const resolved=(plan&&typeof plan==='object')?plan:{};
+    if(!resolved.heading&&!Array.isArray(resolved.widgets))return;
+    saveCachedHomePlan(resolved);
+    if(!allowLiveApply)return;
+    if(curChat)return;
+    if(!isWelcomeScreenVisible())return;
+    const area=document.getElementById('chatArea');
+    if(!area)return;
+    const g=greeting||getLocalTimeGreeting();
+    area.innerHTML=getWelcomeHTML(g,resolved);
+  }catch{}
+  finally{homeWidgetRefreshInFlight=false;}
+}
+
+function startHomeWidgetPrecomputeLoop(){
+  if(homeWidgetRefreshTimer)return;
+  homeWidgetRefreshTimer=window.setInterval(()=>{
+    const canLiveApply=hasCachedHomePlan();
+    precomputeHomeWidgets(canLiveApply);
+  },180000);
+}
+
 function widgetSpanForSize(size){
   const s=(size||'medium').toLowerCase();
   if(s==='small')return 1;
@@ -447,15 +488,8 @@ async function loadWelcome(force=false){
   const greeting=getLocalTimeGreeting();
   const cachedPlan=loadCachedHomePlan()||{};
   area.innerHTML=getWelcomeHTML(greeting,cachedPlan);
-  fetchHomeWidgetsPlan().then(plan=>{
-    const resolved=(plan&&typeof plan==='object')?plan:{};
-    if(!resolved.heading&&!Array.isArray(resolved.widgets))return;
-    saveCachedHomePlan(resolved);
-    if(curChat)return;
-    const liveArea=document.getElementById('chatArea');
-    if(!liveArea)return;
-    liveArea.innerHTML=getWelcomeHTML(greeting,resolved);
-  }).catch(()=>{});
+  const canLiveApply=hasCachedHomePlan();
+  precomputeHomeWidgets(canLiveApply,greeting);
 }
 
 async function fetchHomeWidgetsPlan(){
