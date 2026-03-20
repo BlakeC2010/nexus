@@ -291,6 +291,7 @@ body.light .sidebar{background:var(--bg-raised)}
 .setup-reminder .sr-actions button{padding:7px 10px;border-radius:var(--r-xs);border:1px solid var(--border);background:var(--bg-surface);font-size:11px;color:var(--text-secondary);cursor:pointer}
 .setup-reminder .sr-actions button:hover{background:var(--bg-hover);color:var(--text-primary)}
 .setup-reminder .sr-actions button.ghost{padding:6px 8px;background:transparent}
+.setup-reminder{display:none !important}
 
 /* Model selector */
 .cms-container{position:relative;width:auto;font-size:12px;font-weight:500}
@@ -497,18 +498,20 @@ body.light .chat-area::before{
 .welcome-sub{color:var(--text-muted);font-size:14px;margin:0;line-height:1.4}
 .wl-grid{
   display:grid;
-  grid-template-columns:repeat(4,minmax(0,1fr));
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  grid-template-rows:repeat(2,minmax(112px,1fr));
   gap:10px;
   width:100%;
   grid-auto-flow:dense;
-  grid-auto-rows:minmax(108px,auto);
-  max-height:calc(100vh - 340px);
+  grid-auto-rows:0;
+  height:min(360px,calc(100vh - 360px));
+  max-height:min(360px,calc(100vh - 360px));
   overflow:hidden;
 }
 .wl-widget{background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;padding:14px 14px;min-height:108px}
 .wl-size-small{grid-column:span 1}
-.wl-size-medium{grid-column:span 2}
-.wl-size-large{grid-column:span 4}
+.wl-size-medium{grid-column:span 1}
+.wl-size-large{grid-column:span 1}
 .wl-widget-hd{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:10px}
 .wl-widget-sub{font-size:10px;color:var(--text-secondary);margin:-4px 0 8px}
 .wl-recent-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;cursor:pointer;transition:background .15s;margin-bottom:2px}

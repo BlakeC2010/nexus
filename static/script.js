@@ -19,6 +19,7 @@ const ONB_NO_REMIND_KEY='nexus_onboarding_no_remind';
 const ONB_DISMISS_KEY='nexus_onboarding_reminder_dismissed';
 const CALENDAR_STATE_KEY='nexus_calendar_state_v1';
 const HOME_WIDGET_CACHE_KEY='nexus_home_widgets_cache_v1';
+const CHAT_CACHE_KEY='nexus_recent_chats_v1';
 let calendarToken='';
 let calendarTokenClient=null;
 let calendarEvents=[];
@@ -261,14 +262,16 @@ function setDraft(text){
 async function showApp(){
   document.getElementById('loginPage').style.display='none';
   document.getElementById('appPage').classList.add('visible');
-  await ensureOAuthConfigLoaded();
   loadCalendarState();
-  updateUserUI(); await loadModels(); await refreshChats();
+  allChats=loadCachedChats();
+  hideSetupReminder();
+  updateUserUI();
   if(!curChat){ loadWelcome(); }
-  startHomeWidgetPrecomputeLoop();
+  await ensureOAuthConfigLoaded();
+  await loadModels();
+  await refreshChats();
   updateComposerBusyUI();
   document.getElementById('msgInput').focus();
-  if(!isGuest){ await ensureOnboarding(); }
 }
 
 async function ensureOAuthConfigLoaded(){
@@ -389,9 +392,22 @@ function buildInstantHomePlan(greeting){
     });
   }
 
+  if(!widgets.length){
+    widgets.push({type:'motivation',size:'small',title:'Start here',text:'Pick a master prompt to begin.'});
+  }
+
+  const fillers=[
+    {type:'motivation',size:'small',title:'Quick win',text:'Do one 10-minute task to build momentum.'},
+    {type:'motivation',size:'small',title:'Focus',text:'Choose one priority for this session.'},
+    {type:'motivation',size:'small',title:'Next action',text:'Write your next step in one sentence.'},
+    {type:'motivation',size:'small',title:'Keep moving',text:'Small progress beats perfect planning.'},
+  ];
+  let fi=0;
+  while(widgets.length<5&&fi<fillers.length){widgets.push(fillers[fi++]);}
+
   return {
     heading:(greeting?`${greeting.replace(/[?.!]$/, '')}.`:'What would you like to work on?'),
-    widgets,
+    widgets:widgets.slice(0,5),
   };
 }
 
@@ -399,7 +415,7 @@ function getWelcomeHTML(greeting,homePlan){
   const displayGreeting=greeting!==undefined?greeting:getLocalTimeGreeting();
   const heading=homePlan?.heading?esc(homePlan.heading):'What would you like to work on?';
   const aiWidgets=Array.isArray(homePlan?.widgets)?homePlan.widgets:[];
-  const validWidgets=pickWidgetsForGrid(aiWidgets.filter(hasWidgetContent),8);
+  const validWidgets=pickWidgetsForGrid(aiWidgets.filter(hasWidgetContent),5);
   let widgetCards='';
   
   if(validWidgets.length>0){
@@ -407,7 +423,7 @@ function getWelcomeHTML(greeting,homePlan){
   }
   
   if(!widgetCards){
-    widgetCards=`<div class="wl-widget wl-size-large"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
+    widgetCards=`<div class="wl-widget wl-size-small"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
   }
 
   return `<div class="welcome">
@@ -415,7 +431,7 @@ function getWelcomeHTML(greeting,homePlan){
       <h1 class="welcome-greeting">${displayGreeting}</h1>
       <p class="welcome-sub">${heading}</p>
     </div>
-    <div class="wl-grid">${widgetCards}</div>
+    <div class="wl-grid">${widgetCards}<div class="wl-widget wl-size-small"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div></div>
   </div>`;
 }
 
@@ -471,10 +487,7 @@ function startHomeWidgetPrecomputeLoop(){
 }
 
 function widgetSpanForSize(size){
-  const s=(size||'medium').toLowerCase();
-  if(s==='small')return 1;
-  if(s==='large')return 4;
-  return 2;
+  return 1;
 }
 
 function pickWidgetsForGrid(widgets,maxUnits=8){
@@ -527,7 +540,19 @@ async function loadWelcome(force=false){
   const greeting=getLocalTimeGreeting();
   const instantPlan=buildInstantHomePlan(greeting);
   area.innerHTML=getWelcomeHTML(greeting,instantPlan);
-  precomputeHomeWidgets(false,greeting);
+}
+
+function loadCachedChats(){
+  try{
+    const raw=localStorage.getItem(CHAT_CACHE_KEY);
+    if(!raw)return [];
+    const parsed=JSON.parse(raw);
+    return Array.isArray(parsed)?parsed:[];
+  }catch{return [];}
+}
+
+function saveCachedChats(chats){
+  try{localStorage.setItem(CHAT_CACHE_KEY,JSON.stringify((chats||[]).slice(0,20)));}catch{}
 }
 
 async function fetchHomeWidgetsPlan(){
@@ -726,7 +751,9 @@ function toggleSB(){document.getElementById('sidebar').classList.toggle('closed'
 
 async function refreshChats(){
   const r=await fetch('/api/chats');const d=await r.json();
-  allChats=d.chats||[];renderChatList();
+  allChats=d.chats||[];
+  saveCachedChats(allChats);
+  renderChatList();
 }
 
 function renderChatList(filter=''){
