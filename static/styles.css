@@ -484,12 +484,12 @@ body.light .chat-area::before{
 .welcome{
   display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
   gap:20px;padding:26px 28px 18px;flex:1;
-  max-width:980px;margin:0 auto;width:100%;
+  max-width:900px;margin:0 auto;width:100%;
   animation:appIn .4s var(--ease-out);overflow:visible;position:relative;z-index:1;
 }
-.wl-hero{text-align:center;width:100%}
+.wl-hero{text-align:center;width:100%;max-width:760px;margin:0 auto}
 .welcome-greeting{
-  font-size:clamp(46px,5vw,64px);font-weight:700;letter-spacing:-.04em;line-height:1.05;
+  font-size:clamp(36px,4.2vw,52px);font-weight:700;letter-spacing:-.03em;line-height:1.08;
   background:linear-gradient(135deg,var(--text-primary) 0%,rgba(191,107,58,.9) 45%,var(--text-primary) 85%);
   -webkit-background-clip:text;background-clip:text;color:transparent;
   margin:0 0 8px;
