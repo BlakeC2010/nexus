@@ -1236,14 +1236,44 @@ async function startResearchFromModal(){
 async function runDeepResearch(query,contentEl,area){
   const depth=(document.getElementById('researchDepth')?.value)||deepResearchDepth||'standard';
   deepResearchDepth=depth;
-  const progress=[];
-  const renderProgress=()=>{
-    contentEl.innerHTML=`<div class="research-badge">🔬 Deep Research · ${esc(depth)}</div><div class="research-log">${progress.map(p=>`<div class="rline">${esc(p)}</div>`).join('')}</div>`;
+
+  const stepNames=['Plan','Search','Read','Analyze','Cross-Ref','Write','Review','Export'];
+  const stepIcons=['📋','🔍','📖','🧠','🔗','✍️','✅','📄'];
+  let currentPct=0, currentStep=0, lastMessage='Preparing research pipeline...';
+
+  const renderProgressBar=()=>{
+    const stepsHtml=stepNames.map((name,i)=>{
+      let cls='research-step';
+      if(i<currentStep) cls+=' done';
+      else if(i===currentStep) cls+=' active';
+      const icon=i<currentStep?'✓':(i===currentStep?stepIcons[i]:(i+1));
+      return `<div class="${cls}"><div class="research-step-dot">${icon}</div><div class="research-step-label">${name}</div></div>`;
+    }).join('');
+    const lineProgress=currentStep>0?Math.min(((currentStep)/(stepNames.length-1))*100,100):0;
+
+    contentEl.innerHTML=`
+      <div class="research-badge">🔬 Deep Research · ${esc(depth)}</div>
+      <div class="research-progress">
+        <div class="research-progress-header">
+          <span class="research-progress-title">${currentStep<stepNames.length?stepNames[currentStep]:'Complete'}...</span>
+          <span class="research-progress-pct">${Math.round(currentPct)}%</span>
+        </div>
+        <div class="research-bar-track">
+          <div class="research-bar-fill" style="width:${currentPct}%"></div>
+        </div>
+        <div class="research-steps">
+          <div class="research-steps-line"><div class="research-steps-line-fill" style="width:${lineProgress}%"></div></div>
+          ${stepsHtml}
+        </div>
+        <div class="research-activity">
+          <span class="research-activity-dot"></span>
+          <span>${esc(lastMessage)}</span>
+        </div>
+      </div>`;
     area.scrollTop=area.scrollHeight;
   };
 
-  progress.push('Preparing research pipeline...');
-  renderProgress();
+  renderProgressBar();
 
   const response=await fetch('/api/research',{
     method:'POST',headers:{'Content-Type':'application/json'},
@@ -1271,22 +1301,26 @@ async function runDeepResearch(query,contentEl,area){
       try{evt=JSON.parse(line)}catch(e){continue}
 
       if(evt.type==='progress'){
-        progress.push(evt.message||'Working...');
-        if(progress.length>80)progress.shift();
-        renderProgress();
+        lastMessage=evt.message||'Working...';
+        if(typeof evt.pct==='number') currentPct=evt.pct;
+        if(typeof evt.current_step==='number') currentStep=evt.current_step-1;
+        if(currentStep<0)currentStep=0;
+        renderProgressBar();
       }else if(evt.type==='done'){
+        currentPct=100;
+        currentStep=stepNames.length;
+        lastMessage='Research complete!';
         const report=evt.report||'';
         const srcs=evt.sources||[];
-        const srcHtml=srcs.slice(0,12).map((s,i)=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title||('Source '+(i+1)))}</a></li>`).join('');
+        const srcHtml=srcs.slice(0,15).map((s,i)=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title||('Source '+(i+1)))}</a></li>`).join('');
         const dl=[];
         if(evt.pdf_file)dl.push(`<a class="choice-btn" href="/api/research/download/${encodeURIComponent(evt.pdf_file)}">Download PDF</a>`);
         if(evt.md_file)dl.push(`<a class="choice-btn" href="/api/research/download/${encodeURIComponent(evt.md_file)}">Download Markdown</a>`);
         contentEl.innerHTML=`
-          <div class="research-badge">✅ Research complete · ${esc(depth)}</div>
-          <div class="research-summary">Sources analyzed: <strong>${Number(evt.source_count||srcs.length)}</strong></div>
+          <div class="research-badge">✅ Research complete · ${esc(depth)} · ${Number(evt.source_count||srcs.length)} sources</div>
           <div class="research-actions">${dl.join('')}</div>
           ${srcHtml?`<div class="research-summary"><strong>Top sources</strong><ol style="margin:8px 0 0 18px">${srcHtml}</ol></div>`:''}
-          <div style="margin-top:10px">${fmt(report.slice(0,24000))}</div>
+          <div style="margin-top:10px">${fmt(report.slice(0,32000))}</div>
         `;
         setStatus('Research complete. You can download the report.');
       }else if(evt.type==='error'){
@@ -1425,7 +1459,20 @@ async function sendMessage(){
   pendingFiles=[];renderPF();
   for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
 
-  if(researchEnabled){
+  // ── Auto tool detection ──
+  let useResearch=researchEnabled;
+  if(!useResearch&&!files.length){
+    try{
+      const det=await apiFetch('/api/detect-tools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});
+      const dj=await det.json();
+      if(dj.tool==='research'){
+        useResearch=true;
+        if(dj.confidence==='auto')showToast('Auto-detected research intent — launching Deep Research','info');
+      }
+    }catch(e){/* detection failed, proceed normally */}
+  }
+
+  if(useResearch){
     if(files.length){showToast('Deep Research ignores attachments for now.','info');}
     setChatRunning(targetChatId,true,{type:'research'});
     document.getElementById('btnStop').style.display='none';

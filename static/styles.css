@@ -777,6 +777,30 @@ input[type="file"]{display:none}
 .research-log{margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-surface);font-size:11px;line-height:1.55;max-height:220px;overflow:auto;color:var(--text-secondary)}
 .research-log .rline{padding:4px 0;border-bottom:1px dashed var(--border)}
 .research-log .rline:last-child{border-bottom:none}
+
+/* Research progress bar */
+.research-progress{margin-top:16px;padding:16px 18px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-surface)}
+.research-progress-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.research-progress-title{font-size:12px;font-weight:600;color:var(--text-primary)}
+.research-progress-pct{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.research-bar-track{width:100%;height:6px;border-radius:999px;background:var(--bg-deep);overflow:hidden;position:relative}
+.research-bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--accent),#e8985a);transition:width .5s cubic-bezier(.4,.0,.2,1);position:relative}
+.research-bar-fill::after{content:'';position:absolute;right:0;top:0;bottom:0;width:40px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25));border-radius:999px;animation:research-shimmer 1.5s ease-in-out infinite}
+@keyframes research-shimmer{0%,100%{opacity:.3}50%{opacity:.8}}
+.research-steps{display:flex;gap:0;margin-top:12px;position:relative}
+.research-step{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;z-index:1}
+.research-step-dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);background:var(--bg-deep);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text-muted);transition:all .3s var(--ease);position:relative;z-index:2}
+.research-step.active .research-step-dot{border-color:var(--accent);background:var(--accent);color:#fff;box-shadow:0 0 0 4px rgba(191,107,58,.2);animation:research-pulse 2s ease-in-out infinite}
+.research-step.done .research-step-dot{border-color:var(--green,#4ade80);background:var(--green,#4ade80);color:#fff}
+@keyframes research-pulse{0%,100%{box-shadow:0 0 0 4px rgba(191,107,58,.15)}50%{box-shadow:0 0 0 8px rgba(191,107,58,.08)}}
+.research-step-label{font-size:8px;color:var(--text-muted);margin-top:4px;text-align:center;line-height:1.2;max-width:60px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.research-step.active .research-step-label{color:var(--accent);font-weight:600}
+.research-step.done .research-step-label{color:var(--green,#4ade80)}
+.research-steps-line{position:absolute;top:10px;left:32px;right:32px;height:2px;background:var(--border);z-index:0}
+.research-steps-line-fill{height:100%;background:var(--green,#4ade80);border-radius:999px;transition:width .5s var(--ease)}
+.research-activity{margin-top:10px;font-size:11px;color:var(--text-secondary);min-height:16px;display:flex;align-items:center;gap:6px}
+.research-activity-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:research-activity-blink 1s ease-in-out infinite}
+@keyframes research-activity-blink{0%,100%{opacity:1}50%{opacity:.3}}
 .research-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .research-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--border);font-size:10px;color:var(--text-muted);background:var(--bg-deep)}
 .research-summary{margin-top:10px;padding:10px;border-radius:var(--r-sm);background:var(--bg-deep);border:1px solid var(--border);font-size:11px;color:var(--text-secondary)}

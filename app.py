@@ -1952,6 +1952,69 @@ def chat_message(chat_id):
     clean, executed, new_facts = finalize_chat_response(chat, ctx, resp)
     return jsonify({"reply": clean, "files": executed, "memory_added": new_facts})
 
+def _detect_research_intent(text):
+    """Return True if the user's message implies they want deep research."""
+    lo = text.lower().strip()
+    # Explicit tool prefix
+    if lo.startswith("[deep research]"):
+        return True
+    # Strong research signals – phrases that clearly indicate wanting an in-depth investigation
+    strong = [
+        "research ", "deep dive", "deep research", "in-depth analysis",
+        "comprehensive analysis", "investigate ", "write a report",
+        "write a paper", "literature review", "survey of ",
+        "state of the art", "thorough analysis", "detailed report",
+        "research report", "find sources", "find studies",
+        "what does the research say", "what do studies show",
+        "compile information", "gather information",
+        "multi-source", "academic review", "full analysis",
+    ]
+    if any(s in lo for s in strong):
+        return True
+    # Medium signals  – need at least 2 to trigger
+    medium = [
+        "pros and cons", "compare and contrast", "advantages and disadvantages",
+        "history of ", "evolution of ", "overview of ",
+        "how has ", "what are the latest", "current state of",
+        "trends in ", "recent developments", "emerging ",
+        "what are all the", "comprehensive", "exhaustive",
+        "everything about", "all about ", "tell me everything",
+    ]
+    medium_count = sum(1 for s in medium if s in lo)
+    if medium_count >= 2:
+        return True
+    # Long complex questions with research keywords
+    if len(text) > 200 and medium_count >= 1:
+        return True
+    return False
+
+
+@app.route("/api/detect-tools", methods=["POST"])
+@require_auth_or_guest
+def detect_tools():
+    """Auto-detect which tool(s) should handle a user message."""
+    d = request.get_json() or {}
+    text = (d.get("message") or "").strip()
+    if not text:
+        return jsonify({"tool": None})
+    lo = text.lower()
+    # Check explicit prefixes first
+    if lo.startswith("[deep research]"):
+        return jsonify({"tool": "research", "confidence": "explicit"})
+    if lo.startswith("[search the web]"):
+        return jsonify({"tool": "web_search", "confidence": "explicit"})
+    if lo.startswith("[use canvas]"):
+        return jsonify({"tool": "canvas", "confidence": "explicit"})
+    if lo.startswith("[create a mind map]"):
+        return jsonify({"tool": "mindmap", "confidence": "explicit"})
+    if lo.startswith("[summarize]"):
+        return jsonify({"tool": "summarize", "confidence": "explicit"})
+    # Auto-detect research intent
+    if _detect_research_intent(text):
+        return jsonify({"tool": "research", "confidence": "auto"})
+    return jsonify({"tool": None})
+
+
 @app.route("/api/chats/<chat_id>/stream", methods=["POST"])
 @require_auth_or_guest
 def chat_message_stream(chat_id):
@@ -2456,131 +2519,363 @@ def _generate_research_pdf(title, report_md, sources, output_path):
     pdf.output(str(output_path))
 
 def _run_research_job(job_id, query, depth, resolved):
-    """Background thread: multi-step deep research pipeline."""
+    """Background thread: multi-step deep research pipeline with deep thinking."""
     job = _research_jobs[job_id]
 
     def push(evt_type, **kw):
         job["events"].append({"type": evt_type, **kw})
 
     depth_cfg = {
-        "quick":    {"sub_q": 3, "urls_per_q": 3, "max_fetch": 7,  "detail": "concise"},
-        "standard": {"sub_q": 5, "urls_per_q": 5, "max_fetch": 14, "detail": "thorough"},
-        "deep":     {"sub_q": 8, "urls_per_q": 7, "max_fetch": 22, "detail": "highly comprehensive and deeply detailed"},
-    }.get(depth, {"sub_q": 5, "urls_per_q": 5, "max_fetch": 14, "detail": "thorough"})
+        "quick":    {"sub_q": 4,  "searches_per_q": 2, "urls_per_q": 4,  "max_fetch": 12,  "detail": "concise but insightful", "analysis_words": "300-500", "report_min": 1500, "max_report_tokens": 6144},
+        "standard": {"sub_q": 6,  "searches_per_q": 3, "urls_per_q": 5,  "max_fetch": 20,  "detail": "thorough and comprehensive", "analysis_words": "400-700", "report_min": 3000, "max_report_tokens": 10000},
+        "deep":     {"sub_q": 10, "searches_per_q": 4, "urls_per_q": 7,  "max_fetch": 35,  "detail": "exhaustive, deeply analytical, and authoritative", "analysis_words": "500-900", "report_min": 5000, "max_report_tokens": 14000},
+    }.get(depth, {"sub_q": 6, "searches_per_q": 3, "urls_per_q": 5, "max_fetch": 20, "detail": "thorough and comprehensive", "analysis_words": "400-700", "report_min": 3000, "max_report_tokens": 10000})
 
+    total_steps = 8
     try:
-        # ── Step 1: Query decomposition ──
-        push("progress", step="planning", message="Analyzing query and generating research angles...")
-        decomp = _research_ai_call(
-            f"""You are a research planner. Break this topic into exactly {depth_cfg['sub_q']} specific, distinct sub-questions that form a {depth_cfg['detail']} investigation.
+        # ══════════════════════════════════════════════════════════════
+        # STEP 1: Deep Query Analysis & Research Planning
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="planning", pct=2, total_steps=total_steps, current_step=1,
+             message="Analyzing research topic and formulating investigation strategy...")
 
-Research Topic: {query}
+        plan = _research_ai_call(
+            f"""You are a senior research strategist. Deeply analyze this research topic and create a comprehensive research plan.
 
-Output ONLY a numbered list, one sub-question per line, no extra text:
-1. <sub-question>
-2. <sub-question>
-(continue...)""",
-            resolved, max_tokens=512
+RESEARCH TOPIC: {query}
+
+Think step by step:
+1. What is being asked? What are the core concepts?
+2. What domains of knowledge does this span?
+3. What are the key tensions, debates, or open questions?
+4. What would a world-class researcher investigate?
+
+Now produce EXACTLY this output format:
+
+RESEARCH_ANGLES:
+1. <specific sub-question to investigate>
+2. <specific sub-question to investigate>
+... (exactly {depth_cfg['sub_q']} sub-questions)
+
+SEARCH_STRATEGY:
+For each angle, list 2-3 specific search queries that would find the best sources.
+Angle 1: "query1" | "query2" | "query3"
+Angle 2: "query1" | "query2" | "query3"
+... (one line per angle)
+
+KEY_TERMS:
+<comma-separated list of key technical terms, names, and concepts to watch for>""",
+            resolved, max_tokens=1500
         )
+
+        # Parse sub-questions
         sub_questions = []
-        for line in decomp.split("\n"):
-            m = re.match(r"^\s*\d+[.)]\s+(.+)", line.strip())
-            if m:
-                sub_questions.append(m.group(1).strip())
+        search_queries = {}
+        in_angles = False
+        in_strategy = False
+        angle_idx = 0
+        for line in plan.split("\n"):
+            s = line.strip()
+            if "RESEARCH_ANGLES" in s:
+                in_angles = True; in_strategy = False; continue
+            if "SEARCH_STRATEGY" in s:
+                in_angles = False; in_strategy = True; continue
+            if "KEY_TERMS" in s:
+                in_angles = False; in_strategy = False; continue
+            if in_angles:
+                m = re.match(r"^\s*\d+[.)]\s+(.+)", s)
+                if m:
+                    sub_questions.append(m.group(1).strip())
+            if in_strategy:
+                m = re.match(r"^\s*(?:Angle\s*)?\d+[.):]\s*(.*)", s)
+                if m and angle_idx < len(sub_questions):
+                    queries = [q.strip().strip('"').strip("'") for q in m.group(1).split("|") if q.strip()]
+                    search_queries[angle_idx] = queries[:depth_cfg["searches_per_q"]]
+                    angle_idx += 1
+
         sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"]]
-        push("progress", step="planning", message=f"Research plan: {len(sub_questions)} angles identified.")
+        push("progress", step="planning", pct=8, total_steps=total_steps, current_step=1,
+             message=f"Research plan ready: {len(sub_questions)} investigation angles identified.")
 
-        # ── Step 2: DuckDuckGo search per sub-question + main query ──
+        # ══════════════════════════════════════════════════════════════
+        # STEP 2: Multi-Query Web Search
+        # ══════════════════════════════════════════════════════════════
         all_results, seen_urls = [], set()
-        for sq in sub_questions:
-            push("progress", step="searching", message=f"Searching: {sq[:80]}...")
-            for r in _ddg_search(sq, max_results=depth_cfg["urls_per_q"]):
-                if r["url"] and r["url"] not in seen_urls:
-                    seen_urls.add(r["url"]); r["sub_question"] = sq; all_results.append(r)
-        for r in _ddg_search(query, max_results=5):
-            if r["url"] and r["url"] not in seen_urls:
-                seen_urls.add(r["url"]); r["sub_question"] = query; all_results.append(r)
-        push("progress", step="searching", message=f"Found {len(all_results)} unique sources to read.")
+        total_searches = sum(len(search_queries.get(i, [sub_questions[i]])) for i in range(len(sub_questions))) + 1
+        search_done = 0
 
-        # ── Step 3: Fetch source content ──
+        for sq_idx, sq in enumerate(sub_questions):
+            queries = search_queries.get(sq_idx, [sq])
+            if not queries:
+                queries = [sq]
+            for search_q in queries:
+                search_done += 1
+                pct = 8 + int((search_done / total_searches) * 20)
+                push("progress", step="searching", pct=min(pct, 28), total_steps=total_steps, current_step=2,
+                     message=f"Searching [{search_done}/{total_searches}]: {search_q[:75]}...")
+                for r in _ddg_search(search_q, max_results=depth_cfg["urls_per_q"]):
+                    if r["url"] and r["url"] not in seen_urls:
+                        seen_urls.add(r["url"])
+                        r["sub_question"] = sq
+                        r["search_query"] = search_q
+                        all_results.append(r)
+
+        # Also search the main query directly
+        search_done += 1
+        push("progress", step="searching", pct=28, total_steps=total_steps, current_step=2,
+             message=f"Searching main topic: {query[:75]}...")
+        for r in _ddg_search(query, max_results=6):
+            if r["url"] and r["url"] not in seen_urls:
+                seen_urls.add(r["url"])
+                r["sub_question"] = query
+                all_results.append(r)
+
+        push("progress", step="searching", pct=30, total_steps=total_steps, current_step=2,
+             message=f"Found {len(all_results)} unique sources across {search_done} searches.")
+
+        # ══════════════════════════════════════════════════════════════
+        # STEP 3: Source Content Extraction
+        # ══════════════════════════════════════════════════════════════
         fetched = []
-        for idx, result in enumerate(all_results[:depth_cfg["max_fetch"]]):
+        fetch_total = min(len(all_results), depth_cfg["max_fetch"])
+        for idx, result in enumerate(all_results[:fetch_total]):
             url = result["url"]
-            push("progress", step="fetching",
-                 message=f"Reading [{idx+1}/{min(len(all_results), depth_cfg['max_fetch'])}]: {url[:70]}...")
+            pct = 30 + int(((idx + 1) / fetch_total) * 15)
+            push("progress", step="fetching", pct=min(pct, 45), total_steps=total_steps, current_step=3,
+                 message=f"Reading source [{idx+1}/{fetch_total}]: {result.get('title', url)[:60]}...")
             text = _fetch_url_text(url)
             if text and len(text) > 150:
                 fetched.append({**result, "text": text})
+
         # Fall back to snippets if fetching yielded little
         if len(fetched) < 3:
-            for r in all_results[:15]:
+            for r in all_results[:20]:
                 if r.get("snippet") and len(r["snippet"]) > 80:
                     fetched.append({**r, "text": r["snippet"]})
-        push("progress", step="fetching", message=f"Successfully read {len(fetched)} sources.")
 
-        # ── Step 4: Per-source summarization ──
-        source_summaries = []
+        push("progress", step="fetching", pct=45, total_steps=total_steps, current_step=3,
+             message=f"Successfully extracted content from {len(fetched)} sources.")
+
+        # ══════════════════════════════════════════════════════════════
+        # STEP 4: Deep Analysis Per Source (with reasoning)
+        # ══════════════════════════════════════════════════════════════
+        source_analyses = []
         for idx, src in enumerate(fetched):
-            push("progress", step="analyzing",
-                 message=f"Analyzing source {idx+1}/{len(fetched)}: {(src.get('title') or src['url'])[:55]}...")
-            summary = _research_ai_call(
-                f"""Research topic: {query}
-Source: {src.get('title','')} — {src['url']}
+            pct = 45 + int(((idx + 1) / len(fetched)) * 20)
+            push("progress", step="analyzing", pct=min(pct, 65), total_steps=total_steps, current_step=4,
+                 message=f"Deep analyzing [{idx+1}/{len(fetched)}]: {(src.get('title') or src['url'])[:55]}...")
 
-{src['text'][:6000]}
+            analysis = _research_ai_call(
+                f"""You are a critical research analyst performing deep analysis on a source.
 
-Extract the key facts, statistics, arguments, and insights from this source that are most relevant to the research topic. Be specific. ~200-400 words.""",
-                resolved, max_tokens=700
+MAIN RESEARCH TOPIC: {query}
+SUB-QUESTION THIS SOURCE ADDRESSES: {src.get('sub_question', query)}
+SOURCE: {src.get('title','')} — {src['url']}
+
+CONTENT:
+{src['text'][:7000]}
+
+Perform deep thinking analysis:
+
+1. RELEVANCE: How relevant is this to our research topic? (high/medium/low)
+2. KEY FINDINGS: Extract every important fact, statistic, quote, argument, and data point relevant to the research topic. Be exhaustive.
+3. CREDIBILITY: Assess the source's reliability and potential biases.
+4. UNIQUE INSIGHTS: What does this source reveal that others might not?
+5. CONNECTIONS: How does this relate to or contradict other aspects of the topic?
+6. GAPS: What questions does this raise or leave unanswered?
+
+Write {depth_cfg['analysis_words']} words of detailed analysis.""",
+                resolved, max_tokens=1200
             )
-            if summary and "[AI error" not in summary:
-                source_summaries.append({
-                    "title": src.get("title",""),
+            if analysis and "[AI error" not in analysis:
+                source_analyses.append({
+                    "title": src.get("title", ""),
                     "url": src["url"],
-                    "snippet": src.get("snippet",""),
-                    "summary": summary,
+                    "snippet": src.get("snippet", ""),
+                    "sub_question": src.get("sub_question", ""),
+                    "analysis": analysis,
                 })
 
-        push("progress", step="analyzing",
-             message=f"Analyzed {len(source_summaries)} sources. Writing report...")
+        push("progress", step="analyzing", pct=65, total_steps=total_steps, current_step=4,
+             message=f"Deep analysis complete: {len(source_analyses)} sources thoroughly analyzed.")
 
-        # ── Step 5: Full report synthesis ──
-        push("progress", step="synthesizing", message="Synthesizing findings into a comprehensive report...")
-        summaries_block = "\n\n".join(
-            f"### Source {i+1}: {s['title']}\nURL: {s['url']}\n{s['summary']}"
-            for i, s in enumerate(source_summaries)
+        # ══════════════════════════════════════════════════════════════
+        # STEP 5: Cross-Reference & Synthesis Thinking
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="cross-referencing", pct=67, total_steps=total_steps, current_step=5,
+             message="Cross-referencing findings and identifying patterns...")
+
+        analyses_block = "\n\n".join(
+            f"### Source {i+1}: {s['title']}\nURL: {s['url']}\nSub-question: {s['sub_question']}\n{s['analysis']}"
+            for i, s in enumerate(source_analyses)
         )
+
+        cross_ref = _research_ai_call(
+            f"""You are synthesizing research findings. Deeply analyze ALL source analyses below and produce a synthesis framework.
+
+RESEARCH TOPIC: {query}
+
+SOURCE ANALYSES:
+{analyses_block[:24000]}
+
+Produce:
+
+1. CONSENSUS FINDINGS: What do multiple sources agree on? List specific facts/claims supported by 2+ sources.
+2. CONTRADICTIONS: Where do sources disagree? What are the competing viewpoints?
+3. KEY THEMES: What are the 5-8 major themes that emerge across all sources?
+4. EVIDENCE STRENGTH: Which findings have the strongest evidence? Which are speculative?
+5. NARRATIVE ARC: What story do these findings tell when woven together?
+6. REPORT OUTLINE: Create a detailed section-by-section outline for the final report, with bullet points of what should go in each section.
+
+Be thorough and analytical.""",
+            resolved, max_tokens=3000
+        )
+
+        push("progress", step="cross-referencing", pct=72, total_steps=total_steps, current_step=5,
+             message="Cross-referencing complete. Preparing report structure...")
+
+        # ══════════════════════════════════════════════════════════════
+        # STEP 6: Multi-Pass Report Writing
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="writing", pct=74, total_steps=total_steps, current_step=6,
+             message="Writing comprehensive research report (pass 1: core content)...")
+
         report_md = _research_ai_call(
-            f"""You are an expert research analyst. Write a {depth_cfg['detail']} research report based on the sources below.
+            f"""You are an expert research writer producing a {depth_cfg['detail']} research report.
 
 TOPIC: {query}
 
-SOURCES:
-{summaries_block[:28000]}
+SYNTHESIS FRAMEWORK:
+{cross_ref[:8000]}
 
-Structure the report with these sections (use markdown headers):
-# Executive Summary
-## Key Findings
+SOURCE ANALYSES:
+{analyses_block[:20000]}
+
+Write a {depth_cfg['detail']} research report. Requirements:
+
+STRUCTURE (use markdown headers):
+# {query}
+## Executive Summary
+(250-400 words synthesizing the most important findings, conclusions, and implications)
+
 ## Background & Context
+(Set the stage — why this topic matters, historical context, scope of the issue)
+
+## Key Findings
+### [Finding 1 Title]
+(Detailed analysis with evidence from sources)
+### [Finding 2 Title]
+(Continue for each major finding...)
+
 ## Detailed Analysis
-### [subsection for each major aspect found]
-## Current State & Trends
-## Implications & Insights
-## Conclusion & Recommendations
+### [Major Aspect 1]
+(Deep dive with cross-referenced evidence)
+### [Major Aspect 2]
+(Continue...)
 
-Requirements:
-- Use ## and ### for sections and subsections
-- Use **bold** for key terms and important facts
-- Use bullet lists for key points
-- Include specific facts, numbers, and quotes from sources
-- Minimum 1800 words for a {depth_cfg['detail']} report
-- Be insightful, not just descriptive""",
-            resolved, max_tokens=8192
+## Current Landscape & Trends
+(What's happening now, where things are headed)
+
+## Competing Perspectives
+(Different viewpoints, debates, and controversies)
+
+## Implications & Impact
+(What this means for stakeholders, practical consequences)
+
+## Recommendations
+(Actionable recommendations based on findings)
+
+## Conclusion
+(Final synthesis and forward-looking statement)
+
+QUALITY REQUIREMENTS:
+- Minimum {depth_cfg['report_min']} words
+- Cite specific facts, statistics, and data points from sources
+- Use **bold** for key terms and important findings
+- Use bullet lists and numbered lists for clarity
+- Include specific examples and case studies where available
+- Be analytical and insightful, not just descriptive — explain WHY things matter
+- Draw connections between different findings
+- Address limitations and gaps in the available information
+- Every major claim should reference evidence from the sources""",
+            resolved, max_tokens=depth_cfg["max_report_tokens"]
         )
-        if not report_md or "[AI error" in report_md:
-            report_md = f"# Research Report: {query}\n\n*Error generating report. Sources found below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_summaries)
 
-        # ── Step 6: PDF generation ──
-        push("progress", step="pdf", message="Generating PDF report...")
+        if not report_md or "[AI error" in report_md:
+            report_md = f"# Research Report: {query}\n\n*Error generating report. Sources analyzed below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses)
+
+        # Pass 2: Enhancement (for standard and deep)
+        if depth in ("standard", "deep") and report_md and "[AI error" not in report_md:
+            push("progress", step="writing", pct=82, total_steps=total_steps, current_step=6,
+                 message="Enhancing report (pass 2: depth and polish)...")
+            enhanced = _research_ai_call(
+                f"""You are a senior editor reviewing and enhancing a research report. Your job is to significantly improve it.
+
+ORIGINAL REPORT:
+{report_md[:20000]}
+
+ADDITIONAL SOURCE DATA (use to add missing details):
+{analyses_block[:10000]}
+
+ENHANCEMENT INSTRUCTIONS:
+1. Add more specific data points, statistics, and evidence where sections feel thin
+2. Strengthen the executive summary to be more impactful
+3. Add transitional sentences between sections for better flow
+4. Ensure every section has sufficient depth (no section should be less than 150 words)
+5. Add a "Key Takeaways" bullet list after the Executive Summary
+6. Make sure the Recommendations section is concrete and actionable
+7. Improve the conclusion to be memorable and forward-looking
+8. Fix any logical gaps or unsupported claims
+
+Output the COMPLETE enhanced report in markdown. Do not truncate or abbreviate — write the full report.""",
+                resolved, max_tokens=depth_cfg["max_report_tokens"]
+            )
+            if enhanced and "[AI error" not in enhanced and len(enhanced) > len(report_md) * 0.7:
+                report_md = enhanced
+
+        push("progress", step="writing", pct=88, total_steps=total_steps, current_step=6,
+             message="Report writing complete.")
+
+        # ══════════════════════════════════════════════════════════════
+        # STEP 7: Fact-Check Pass
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="fact-checking", pct=89, total_steps=total_steps, current_step=7,
+             message="Running fact-check and quality review...")
+
+        quality_check = _research_ai_call(
+            f"""Review this research report for quality and accuracy.
+
+REPORT:
+{report_md[:16000]}
+
+Check for:
+1. Any unsupported or potentially inaccurate claims
+2. Internal contradictions
+3. Missing important perspectives
+4. Sections that need more evidence
+
+If you find issues, list them briefly. If the report is solid, say "QUALITY: PASS".
+Then provide a one-paragraph "Research Limitations" section that should be appended to the report.""",
+            resolved, max_tokens=800
+        )
+
+        # Append limitations if provided
+        if quality_check and "Research Limitations" in quality_check:
+            lim_start = quality_check.find("Research Limitations")
+            limitations = quality_check[lim_start:]
+            if not report_md.rstrip().endswith("---"):
+                report_md += "\n\n---\n\n"
+            report_md += f"## {limitations}"
+
+        push("progress", step="fact-checking", pct=92, total_steps=total_steps, current_step=7,
+             message="Quality review complete.")
+
+        # ══════════════════════════════════════════════════════════════
+        # STEP 8: PDF & File Generation
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="pdf", pct=93, total_steps=total_steps, current_step=8,
+             message="Generating PDF and Markdown reports...")
+
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_q = re.sub(r"[^\w\s-]", "", query[:40]).strip().replace(" ", "_")
         pdf_fn = f"research_{safe_q}_{ts}.pdf"
@@ -2589,23 +2884,27 @@ Requirements:
         rdir.mkdir(parents=True, exist_ok=True)
         (rdir / md_fn).write_text(
             f"# {query}\n\n{report_md}\n\n---\n\n## Sources\n\n" +
-            "".join(f"- [{s['title']}]({s['url']})\n" for s in source_summaries),
+            "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses),
             encoding="utf-8"
         )
         pdf_ok = False
         try:
-            _generate_research_pdf(query, report_md, source_summaries, rdir / pdf_fn)
+            _generate_research_pdf(query, report_md, source_analyses, rdir / pdf_fn)
             pdf_ok = True
         except Exception as pdf_err:
-            push("progress", step="pdf", message=f"PDF note: {pdf_err} — markdown saved.")
+            push("progress", step="pdf", pct=96, total_steps=total_steps, current_step=8,
+                 message=f"PDF note: {pdf_err} — markdown saved.")
+
+        push("progress", step="pdf", pct=100, total_steps=total_steps, current_step=8,
+             message="All files generated successfully.")
 
         push("done",
              report=report_md,
              pdf_file=pdf_fn if pdf_ok else None,
              md_file=md_fn,
-             sources=[{"title": s["title"], "url": s["url"], "snippet": s["snippet"]} for s in source_summaries],
+             sources=[{"title": s["title"], "url": s["url"], "snippet": s["snippet"]} for s in source_analyses],
              sub_questions=sub_questions,
-             source_count=len(source_summaries),
+             source_count=len(source_analyses),
         )
         job["status"] = "done"
 
