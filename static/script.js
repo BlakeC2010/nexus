@@ -1536,6 +1536,7 @@ async function sendMessage(){
     }catch(e){showToast('Failed to create chat: '+e.message,'error');return;}
   }
   const targetChatId=curChat;
+
   const w=document.querySelector('#chatArea .welcome');
   if(w){
     // Choreographed exit: widgets shrink first, then hero fades
@@ -1556,13 +1557,14 @@ async function sendMessage(){
     setTimeout(()=>{if(w.parentNode)w.remove();},400);
   }
   const files=[...pendingFiles];
+
   addMsg('user',text,[],{fileNames:files.map(f=>f.name),files});
   setStatus('Working on it...');
   input.value='';input.style.height='auto';
   pendingFiles=[];renderPF();
   for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
 
-  // ── Research only when explicitly toggled ──
+  // ── Research when explicitly toggled or auto-detected ──
   let useResearch=researchEnabled;
 
   if(useResearch){
@@ -1708,6 +1710,17 @@ async function sendMessage(){
             }
             finalHTML+=renderArtifactCards(artifactIds,'ready');
             if(data.memory_added?.length)finalHTML+=`<div class="mops">🧠 Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
+
+            // ── AI-triggered deep research ──
+            if(data.research_trigger){
+              const rq=data.research_trigger;
+              setTimeout(()=>{
+                document.getElementById('researchQuery').value=rq;
+                openResearchModal();
+                generateResearchPlan();
+              },400);
+            }
+
             if(canRender()){
               contentEl.style.opacity='0';
               contentEl.style.transform='translateY(6px)';
@@ -2745,3 +2758,24 @@ function initMermaidTheme(){
 
 document.addEventListener('DOMContentLoaded',()=>{initMermaidTheme();});
 document.addEventListener('DOMContentLoaded',()=>{renderProductivityHub();});
+
+// ─── Keep-alive ping to prevent Render from sleeping while user is active ───
+(function(){
+  const PING_INTERVAL=4*60*1000; // every 4 minutes
+  let pingTimer=null;
+  function startPing(){
+    if(pingTimer)return;
+    pingTimer=setInterval(()=>{
+      fetch('/api/ping').catch(()=>{});
+    },PING_INTERVAL);
+  }
+  function stopPing(){
+    if(pingTimer){clearInterval(pingTimer);pingTimer=null;}
+  }
+  // Ping while tab is visible
+  startPing();
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden) stopPing();
+    else startPing();
+  });
+})();

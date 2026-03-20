@@ -865,6 +865,16 @@ mindmap
 [{{"text":"First task","done":false}},{{"text":"Second task","done":true}},{{"text":"Third task","done":false}}]
 ```
 Each item needs "text" (string) and "done" (boolean). The user will be able to check off, edit, and delete items interactively right in the chat. Use this format any time tasks/checklists are relevant. If the user says they completed something, you can output an updated list with done:true on the completed items.
+IMPORTANT: Always output the todolist block DIRECTLY in your response text. NEVER wrap it inside a <<<FILE_CREATE>>> or <<<FILE_UPDATE>>> block. Do NOT save todolists as .md files — just output the ```todolist block inline so it renders interactively.
+
+14. DEEP RESEARCH TOOL — You have access to a powerful Deep Research tool that searches the web, reads multiple sources, cross-references them, and produces a comprehensive cited report. YOU decide when to use it. To trigger it, include this tag in your response:
+<<<DEEP_RESEARCH: the research query>>>
+Guidelines for when to use it:
+- If the user CLEARLY asks for research, a deep dive, an investigation, a report with sources, or comprehensive analysis — trigger it immediately. Include a brief message like "Let me fire up deep research for that" along with the tag.
+- If you are UNSURE whether the user wants deep research or just a conversational answer, ASK them first. For example: "I can give you a quick answer from what I know, or I can run a full deep research with real sources. Which would you prefer?"
+- If the user just wants a quick conversational answer, general knowledge, or casual chat — do NOT trigger it. Just answer normally.
+- NEVER try to simulate research yourself by making up a fake report from your training data. If a topic needs real sources and current data, use the tool.
+- You can also answer the user's question normally AND trigger research at the same time if you want to give them something immediately while the research runs.
 
 File operations format:
 <<<FILE_CREATE: path/to/file.md>>>
@@ -971,10 +981,20 @@ def execute_file_operations(text):
 def extract_memory_ops(text):
     return [m.group(1).strip() for m in re.finditer(r'<<<MEMORY_ADD:\s*(.+?)>>>', text)]
 
+def extract_research_trigger(text):
+    """Extract <<<DEEP_RESEARCH: query>>> from AI response and return (cleaned_text, query_or_None)."""
+    m = re.search(r'<<<DEEP_RESEARCH:\s*(.+?)>>>', text)
+    if m:
+        query = m.group(1).strip()
+        cleaned = re.sub(r'<<<DEEP_RESEARCH:\s*.+?>>>', '', text).strip()
+        return cleaned, query
+    return text, None
+
 def clean_response(text):
     text = re.sub(r'<<<FILE_CREATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<FILE_UPDATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<MEMORY_ADD:\s*.+?>>>', '', text)
+    text = re.sub(r'<<<DEEP_RESEARCH:\s*.+?>>>', '', text)
     return text.strip()
 
 _YT_RE = re.compile(r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{11})')
@@ -1551,6 +1571,11 @@ def index():
     html = html.replace("__CACHE_BUST__", _BOOT_TS)
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
+@app.route("/api/ping")
+def ping():
+    """Lightweight keep-alive endpoint to prevent Render from sleeping."""
+    return jsonify({"ok": True, "ts": int(time.time())})
+
 @app.after_request
 def add_no_cache_headers(resp):
     path = request.path or ""
@@ -1988,8 +2013,12 @@ def chat_message(chat_id):
             return jsonify({"error": f"Rate limit hit — wait a moment and try again. ({err[:120]})", "files": []})
         return jsonify({"error": f"API error: {err}", "files": []})
 
+    resp, research_query = extract_research_trigger(resp)
     clean, executed, new_facts = finalize_chat_response(chat, ctx, resp)
-    return jsonify({"reply": clean, "files": executed, "memory_added": new_facts})
+    result = {"reply": clean, "files": executed, "memory_added": new_facts}
+    if research_query:
+        result["research_trigger"] = research_query
+    return jsonify(result)
 
 def _detect_research_intent(text):
     """Return True if the user's message implies they want deep research."""
@@ -2110,14 +2139,20 @@ def chat_message_stream(chat_id):
                 pieces.append(full)
                 yield event({"type": "delta", "text": full})
 
-            clean, executed, new_facts = finalize_chat_response(chat, ctx, "".join(pieces))
-            yield event({
+            raw_text = "".join(pieces)
+            # Check if AI triggered deep research
+            raw_text, research_query = extract_research_trigger(raw_text)
+            clean, executed, new_facts = finalize_chat_response(chat, ctx, raw_text)
+            done_payload = {
                 "type": "done",
                 "reply": clean,
                 "files": executed,
                 "memory_added": new_facts,
                 "title": chat.get("title", "New Chat"),
-            })
+            }
+            if research_query:
+                done_payload["research_trigger"] = research_query
+            yield event(done_payload)
         except Exception as e:
             err = str(e)
             if any(w in err.lower() for w in ("429", "quota", "rate")):
