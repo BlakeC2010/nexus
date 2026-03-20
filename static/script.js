@@ -354,10 +354,10 @@ function buildInstantHomePlan(greeting){
   const visions=(state.visions||[]).slice(0,1);
   const chats=(allChats||[]).slice(0,5);
   const cal=(calendarEvents||[]).slice(0,4);
-  const widgets=[];
+  const pool=[];
 
   if(chats.length){
-    widgets.push({
+    pool.push({
       type:'recent',
       size:'medium',
       title:'Recent chats',
@@ -365,7 +365,7 @@ function buildInstantHomePlan(greeting){
     });
   }
   if(todos.length){
-    widgets.push({
+    pool.push({
       type:'todos',
       size:'medium',
       title:'Priority tasks',
@@ -374,7 +374,7 @@ function buildInstantHomePlan(greeting){
     });
   }
   if(cal.length){
-    widgets.push({
+    pool.push({
       type:'calendar',
       size:'medium',
       title:'Upcoming schedule',
@@ -383,7 +383,7 @@ function buildInstantHomePlan(greeting){
   }
   if(visions.length){
     const v=visions[0];
-    widgets.push({
+    pool.push({
       type:'vision',
       size:'small',
       title:'Vision target',
@@ -392,18 +392,20 @@ function buildInstantHomePlan(greeting){
     });
   }
 
-  if(!widgets.length){
-    widgets.push({type:'motivation',size:'small',title:'Start here',text:'Pick a master prompt to begin.'});
-  }
-
   const fillers=[
     {type:'motivation',size:'small',title:'Quick win',text:'Do one 10-minute task to build momentum.'},
     {type:'motivation',size:'small',title:'Focus',text:'Choose one priority for this session.'},
     {type:'motivation',size:'small',title:'Next action',text:'Write your next step in one sentence.'},
     {type:'motivation',size:'small',title:'Keep moving',text:'Small progress beats perfect planning.'},
+    {type:'motivation',size:'small',title:'Start here',text:'Pick a master prompt to begin.'},
   ];
-  let fi=0;
-  while(widgets.length<5&&fi<fillers.length){widgets.push(fillers[fi++]);}
+
+  const candidates=[...pool,...fillers];
+  for(let i=candidates.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [candidates[i],candidates[j]]=[candidates[j],candidates[i]];
+  }
+  const widgets=candidates.slice(0,5);
 
   return {
     heading:(greeting?`${greeting.replace(/[?.!]$/, '')}.`:'What would you like to work on?'),
@@ -1552,11 +1554,6 @@ async function openSettings(){
     light.style.cssText=(theme==='light'?activeStyle:inactiveStyle)+'padding:7px 14px;font-size:11px;font-weight:500;border:none;cursor:pointer;transition:all .2s;';
   }
   if(curUser)document.getElementById('profileName').value=curUser.name||'';
-  try{
-    const r=await fetch('/api/profile-onboarding');
-    const d=await r.json();
-    document.getElementById('profileOrigin').value=d?.profile?.origin_story||'';
-  }catch{}
   renderCalendarStatus();
   openMemory();openFiles();openData();
 }
@@ -1601,32 +1598,6 @@ async function saveName(){
   await fetch('/api/auth/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
   curUser.name=name;updateUserUI();
   showToast('Profile updated.','success');
-}
-
-async function saveProfileContext(){
-  const origin=(document.getElementById('profileOrigin')?.value||'').trim();
-  try{
-    const r=await fetch('/api/profile-onboarding');
-    const d=await r.json();
-    const p=d.profile||{};
-    const payload={
-      preferred_name:(p.preferred_name||curUser?.name||'').trim(),
-      what_you_do:(p.what_you_do||'builder').trim(),
-      hobbies:(p.hobbies||'technology').trim(),
-      current_focus:(p.current_focus||'').trim(),
-      origin_story:origin,
-    };
-    if(!payload.preferred_name||!payload.what_you_do||!payload.hobbies){
-      showToast('Complete quick setup first, then save creator context.','info');
-      return;
-    }
-    const s=await fetch('/api/profile-onboarding',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const out=await s.json();
-    if(out.error){showToast(out.error,'error');return;}
-    showToast('Creator context saved. Nexus will use this in chats.','success');
-  }catch{
-    showToast('Could not save creator context.','error');
-  }
 }
 
 function loadCalendarState(){

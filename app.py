@@ -132,6 +132,7 @@ MODELS = {
 
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 # In-memory guest runtime state (never persisted)
 GUEST_RUNTIME = {}
@@ -659,8 +660,10 @@ def build_system_prompt(memory=None):
 
     mem_section = ""
     if memory and memory.get("facts"):
+        facts = [f for f in memory.get("facts", []) if not str(f).startswith("Why I built Nexus:")]
+        facts.append(f"Why I built Nexus: {DEFAULT_CREATOR_ORIGIN_STORY}")
         mem_section = "\n\n[PERSISTENT MEMORY]\n" + "\n".join(
-            f"{i}. {f}" for i, f in enumerate(memory["facts"], 1))
+            f"{i}. {f}" for i, f in enumerate(facts, 1))
 
     profile_section = ""
     try:
@@ -674,8 +677,7 @@ def build_system_prompt(memory=None):
             lines.append(f"Hobbies: {p.get('hobbies')}")
         if p.get("current_focus"):
             lines.append(f"Current focus: {p.get('current_focus')}")
-        if p.get("origin_story"):
-            lines.append(f"Why they built Nexus: {p.get('origin_story')}")
+        lines.append(f"Why they built Nexus: {DEFAULT_CREATOR_ORIGIN_STORY}")
         if lines:
             profile_section = "\n\n[USER PROFILE CONTEXT]\n" + "\n".join(lines)
     except Exception:
@@ -1396,6 +1398,15 @@ def generate_image_google(api_key, prompt):
 def index():
     return send_from_directory("static", "index.html")
 
+@app.after_request
+def add_no_cache_headers(resp):
+    path = request.path or ""
+    if path == "/" or path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
 # ─── Routes: Auth ─────────────────────────────────────────────────────────────
 
 @app.route("/api/auth/register", methods=["POST"])
@@ -1581,7 +1592,7 @@ def get_profile_onboarding():
             "what_you_do": p.get("what_you_do", ""),
             "hobbies": p.get("hobbies", ""),
             "current_focus": p.get("current_focus", ""),
-            "origin_story": p.get("origin_story", ""),
+            "origin_story": DEFAULT_CREATOR_ORIGIN_STORY,
         },
     })
 
@@ -1593,8 +1604,6 @@ def save_profile_onboarding():
     what_you_do = (d.get("what_you_do") or "").strip()
     hobbies = (d.get("hobbies") or "").strip()
     current_focus = (d.get("current_focus") or "").strip()
-    origin_story = (d.get("origin_story") or "").strip()
-
     if not preferred_name or not what_you_do or not hobbies:
         return jsonify({"error": "Name, what you do, and hobbies are required."}), 400
 
@@ -1605,7 +1614,7 @@ def save_profile_onboarding():
         "what_you_do": what_you_do[:300],
         "hobbies": hobbies[:300],
         "current_focus": current_focus[:300],
-        "origin_story": origin_story[:500],
+        "origin_story": DEFAULT_CREATOR_ORIGIN_STORY,
     })
     save_profile(profile)
     _save_user_name(profile["preferred_name"])
@@ -1618,8 +1627,7 @@ def save_profile_onboarding():
     facts.append(f"Hobbies: {profile['hobbies']}")
     if profile["current_focus"]:
         facts.append(f"Current focus: {profile['current_focus']}")
-    if profile["origin_story"]:
-        facts.append(f"Why I built Nexus: {profile['origin_story']}")
+    facts.append(f"Why I built Nexus: {DEFAULT_CREATOR_ORIGIN_STORY}")
     mem["facts"] = facts
     save_memory(mem)
 
