@@ -497,7 +497,7 @@ body.light .chat-area::before{
 .welcome-sub{color:var(--text-muted);font-size:16px;margin:0;line-height:1.6}
 .wl-grid{
   display:grid;
-  grid-template-columns:repeat(12,minmax(0,1fr));
+  grid-template-columns:repeat(4,minmax(0,1fr));
   gap:14px;
   width:100%;
   grid-auto-flow:dense;
@@ -506,9 +506,9 @@ body.light .chat-area::before{
   overflow:hidden;
 }
 .wl-widget{background:var(--bg-surface);border:1px solid var(--border);border-radius:16px;padding:20px 18px;min-height:140px}
-.wl-size-small{grid-column:span 3}
-.wl-size-medium{grid-column:span 6}
-.wl-size-large{grid-column:span 12}
+.wl-size-small{grid-column:span 1}
+.wl-size-medium{grid-column:span 2}
+.wl-size-large{grid-column:span 4}
 .wl-widget-hd{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:16px}
 .wl-widget-sub{font-size:11px;color:var(--text-secondary);margin:-8px 0 12px}
 .wl-recent-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;cursor:pointer;transition:background .15s;margin-bottom:4px}

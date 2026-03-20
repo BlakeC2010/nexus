@@ -18,6 +18,7 @@ const ONB_SKIP_KEY='nexus_onboarding_skipped';
 const ONB_NO_REMIND_KEY='nexus_onboarding_no_remind';
 const ONB_DISMISS_KEY='nexus_onboarding_reminder_dismissed';
 const CALENDAR_STATE_KEY='nexus_calendar_state_v1';
+const HOME_WIDGET_CACHE_KEY='nexus_home_widgets_cache_v1';
 let calendarToken='';
 let calendarTokenClient=null;
 let calendarEvents=[];
@@ -345,15 +346,19 @@ function getWelcomeHTML(greeting,homePlan){
   const displayGreeting=greeting!==undefined?greeting:getLocalTimeGreeting();
   const heading=homePlan?.heading?esc(homePlan.heading):'What would you like to work on?';
   const aiWidgets=Array.isArray(homePlan?.widgets)?homePlan.widgets:[];
-  const validWidgets=aiWidgets.filter(hasWidgetContent);
+  const validWidgets=pickWidgetsForGrid(aiWidgets.filter(hasWidgetContent),8);
   let widgetCards='';
   
   if(validWidgets.length>0){
-    widgetCards=validWidgets.slice(0,6).map(renderHomeWidget).filter(Boolean).join('');
+    widgetCards=validWidgets.map(renderHomeWidget).filter(Boolean).join('');
   }
   
   if(!widgetCards){
-    widgetCards=`<div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Recent chats</div><div class="wl-recent-list"><div class="wl-empty">No chats yet. Start a new conversation to get rolling.</div></div></div><div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
+    const recent=allChats.slice(0,5);
+    const recentBody=recent.length
+      ?recent.map(c=>`<div class="wl-recent-item" onclick="openChat('${esc(c.id||'')}')"><span class="wl-ri-title">${esc(c.title||'Untitled')}</span></div>`).join('')
+      :'<div class="wl-empty">No chats yet. Start a new conversation to get rolling.</div>';
+    widgetCards=`<div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Recent chats</div><div class="wl-recent-list">${recentBody}</div></div><div class="wl-widget wl-size-medium"><div class="wl-widget-hd">Master prompts</div><div class="wl-action-grid">${buildMasterPromptCards()}</div></div>`;
   }
 
   return `<div class="welcome">
@@ -370,6 +375,39 @@ function typewriterEffect(el,text,speed=46){
   let i=0;
   const tick=()=>{if(i<text.length){el.textContent+=text[i++];setTimeout(tick,speed)}};
   tick();
+}
+
+function loadCachedHomePlan(){
+  try{
+    const raw=localStorage.getItem(HOME_WIDGET_CACHE_KEY);
+    if(!raw)return null;
+    const parsed=JSON.parse(raw);
+    return parsed&&typeof parsed==='object'?parsed:null;
+  }catch{return null;}
+}
+
+function saveCachedHomePlan(plan){
+  try{localStorage.setItem(HOME_WIDGET_CACHE_KEY,JSON.stringify(plan||{}));}catch{}
+}
+
+function widgetSpanForSize(size){
+  const s=(size||'medium').toLowerCase();
+  if(s==='small')return 1;
+  if(s==='large')return 4;
+  return 2;
+}
+
+function pickWidgetsForGrid(widgets,maxUnits=8){
+  const out=[];
+  let used=0;
+  for(const w of widgets){
+    const span=widgetSpanForSize(w?.size);
+    if(used+span>maxUnits)continue;
+    out.push(w);
+    used+=span;
+    if(used>=maxUnits)break;
+  }
+  return out;
 }
 
 function getLocalTimeGreeting(){
@@ -407,10 +445,17 @@ async function loadWelcome(force=false){
   const area=document.getElementById('chatArea');
   if(curChat&&!force)return;
   const greeting=getLocalTimeGreeting();
-  const plan=await fetchHomeWidgetsPlan();
-  area.innerHTML=getWelcomeHTML('\u200b',plan);
-  const greetEl=area.querySelector('.welcome-greeting');
-  if(greetEl)typewriterEffect(greetEl,greeting);
+  const cachedPlan=loadCachedHomePlan()||{};
+  area.innerHTML=getWelcomeHTML(greeting,cachedPlan);
+  fetchHomeWidgetsPlan().then(plan=>{
+    const resolved=(plan&&typeof plan==='object')?plan:{};
+    if(!resolved.heading&&!Array.isArray(resolved.widgets))return;
+    saveCachedHomePlan(resolved);
+    if(curChat)return;
+    const liveArea=document.getElementById('chatArea');
+    if(!liveArea)return;
+    liveArea.innerHTML=getWelcomeHTML(greeting,resolved);
+  }).catch(()=>{});
 }
 
 async function fetchHomeWidgetsPlan(){
@@ -699,9 +744,21 @@ async function openChat(id){
 async function delChat(id){
   const ok=await _dlg({title:'Delete chat',msg:'This chat will be permanently deleted.',icon:'🗑',iconType:'danger',confirmText:'Delete',cancelText:'Cancel',dangerous:true});
   if(!ok)return;
-  await fetch(`/api/chats/${id}`,{method:'DELETE'});
-  if(curChat===id){curChat=null;loadWelcome();document.getElementById('topTitle').textContent='NEXUS'}
-  await refreshChats();
+  try{
+    const run=runningStreams.get(id);
+    if(run?.controller)run.controller.abort();
+    runningStreams.delete(id);
+    await fetch(`/api/chats/${id}`,{method:'DELETE'});
+    if(curChat===id){
+      curChat=null;
+      document.getElementById('topTitle').textContent='NEXUS';
+      loadWelcome(true);
+    }
+    await refreshChats();
+    updateComposerBusyUI();
+  }catch{
+    showToast('Could not delete chat right now.','error');
+  }
 }
 
 // ─── Models ───────────────────────────────────────
