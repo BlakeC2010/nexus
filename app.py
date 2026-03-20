@@ -135,8 +135,17 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 _BOOT_TS = str(int(time.time()))
 
-# In-memory guest runtime state (never persisted)
+# In-memory guest runtime state (backed by disk)
 GUEST_RUNTIME = {}
+
+def _guest_dir(guest_id):
+    """Return (and create) the on-disk directory for a guest user."""
+    d = DATA_DIR / "guests" / guest_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _hash_remember_token(token):
+    return hashlib.sha256(token.encode()).hexdigest()
 
 def _ensure_dirs():
     DATA_DIR.mkdir(exist_ok=True)
@@ -274,11 +283,26 @@ def _guest_runtime_state():
     guest_id = session.get("guest_id")
     if not guest_id:
         return None
-    state = GUEST_RUNTIME.setdefault(guest_id, {
-        "date": datetime.date.today().isoformat(),
-        "tokens": 0,
-        "chats": {},
-    })
+    if guest_id not in GUEST_RUNTIME:
+        # Try to restore from disk
+        gdir = _guest_dir(guest_id)
+        meta = _load_json(gdir / "meta.json", {})
+        chats = {}
+        chats_dir = gdir / "chats"
+        if chats_dir.exists():
+            for f in chats_dir.glob("*.json"):
+                try:
+                    c = _load_json(f, None)
+                    if c and c.get("id"):
+                        chats[c["id"]] = c
+                except Exception:
+                    pass
+        GUEST_RUNTIME[guest_id] = {
+            "date": meta.get("date", datetime.date.today().isoformat()),
+            "tokens": meta.get("tokens", 0),
+            "chats": chats,
+        }
+    state = GUEST_RUNTIME[guest_id]
     today = datetime.date.today().isoformat()
     if state.get("date") != today:
         state["date"] = today
@@ -296,6 +320,11 @@ def _add_guest_tokens(n):
     if not state:
         return
     state["tokens"] = int(state.get("tokens", 0)) + max(0, int(n))
+    # Persist token count to disk
+    guest_id = session.get("guest_id")
+    if guest_id:
+        gdir = _guest_dir(guest_id)
+        _save_json(gdir / "meta.json", {"date": state["date"], "tokens": state["tokens"]})
 
 def _cur_user():
     uid = session.get("user_id")
@@ -538,7 +567,21 @@ def _is_transient_empty_chat(chat_obj):
     return (not has_messages) and title in ("", "new chat") and not folder
 
 def list_chats():
-    if session.get("guest") and not session.get("user_id"): return []
+    if session.get("guest") and not session.get("user_id"):
+        guest_id = session.get("guest_id")
+        if not guest_id:
+            return []
+        state = _guest_runtime_state() or {}
+        chats = []
+        for c in (state.get("chats") or {}).values():
+            if _is_transient_empty_chat(c):
+                continue
+            chats.append({"id": c.get("id"), "title": c.get("title", "Untitled"),
+                "created": c.get("created"), "updated": c.get("updated"),
+                "model": c.get("model", ""), "folder": c.get("folder", ""),
+                "message_count": len(c.get("messages", []))})
+        chats.sort(key=lambda x: x.get("updated") or "", reverse=True)
+        return chats
     uid = session.get("user_id")
     if not uid: return []
     if not FIREBASE_ENABLED:
@@ -576,7 +619,17 @@ def load_chat(cid):
     if not _safe_id(cid): return None
     if session.get("guest") and not session.get("user_id"):
         state = _guest_runtime_state() or {}
-        return (state.get("chats") or {}).get(cid)
+        chat = (state.get("chats") or {}).get(cid)
+        if chat:
+            return chat
+        # Fallback: try loading from disk
+        guest_id = session.get("guest_id")
+        if guest_id:
+            disk_chat = _load_json(_guest_dir(guest_id) / "chats" / f"{cid}.json", None)
+            if disk_chat:
+                state.setdefault("chats", {})[cid] = disk_chat
+            return disk_chat
+        return None
     uid = session.get("user_id")
     if not uid: return None
     if not FIREBASE_ENABLED:
@@ -592,6 +645,10 @@ def save_chat(c):
         if not state: return
         c["updated"] = datetime.datetime.now().isoformat()
         state.setdefault("chats", {})[c["id"]] = c
+        # Persist to disk so chats survive server restarts
+        guest_id = session.get("guest_id")
+        if guest_id:
+            _save_json(_guest_dir(guest_id) / "chats" / f"{c['id']}.json", c)
         return
     uid = session.get("user_id")
     if not uid: return
@@ -609,9 +666,14 @@ def delete_chat(cid):
     if session.get("guest") and not session.get("user_id"):
         state = _guest_runtime_state() or {}
         chats = state.get("chats") or {}
+        deleted = False
         if cid in chats:
-            del chats[cid]; return True
-        return False
+            del chats[cid]; deleted = True
+        guest_id = session.get("guest_id")
+        if guest_id:
+            cf = _guest_dir(guest_id) / "chats" / f"{cid}.json"
+            if cf.exists(): cf.unlink(); deleted = True
+        return deleted
     uid = session.get("user_id")
     if not uid: return False
     if not FIREBASE_ENABLED:
@@ -1454,10 +1516,17 @@ def logout():
 
 @app.route("/api/auth/guest", methods=["POST"])
 def guest_login():
+    d = request.get_json() or {}
+    # Reuse a previously-stored guest_id so chats survive session loss
+    prev_gid = (d.get("guest_id") or "").strip()
+    if prev_gid and re.match(r'^[a-zA-Z0-9\-_]{1,36}$', prev_gid):
+        gid = prev_gid
+    else:
+        gid = str(uuid.uuid4())[:12]
     session["guest"] = True
-    session["guest_id"] = str(uuid.uuid4())[:12]
+    session["guest_id"] = gid
     session.permanent = True
-    return jsonify({"ok": True, "guest": True, "plan": "guest"})
+    return jsonify({"ok": True, "guest": True, "plan": "guest", "guest_id": gid})
 
 @app.route("/api/auth/guest/status")
 def guest_status():
@@ -1504,10 +1573,43 @@ def auth_google():
     except Exception as e:
         return jsonify({"error": f"Google verification failed: {e}"}), 400
     user = oauth_user(email, name, "google")
+    # Generate a remember token so the frontend can re-auth after session loss
+    remember_token = secrets.token_hex(32)
+    tokens = user.get("remember_tokens", [])
+    tokens = tokens[-4:]  # Keep last 5 tokens max
+    tokens.append(_hash_remember_token(remember_token))
+    user["remember_tokens"] = tokens
+    _save_user(user)
     session.permanent = True
     session["user_id"] = user["id"]; session["email"] = user["email"]
     return jsonify({"user": {"id": user["id"], "email": user["email"],
-                             "name": user["name"], "theme": user.get("theme", "dark"), "plan": user.get("plan", "free")}})
+                             "name": user["name"], "theme": user.get("theme", "dark"), "plan": user.get("plan", "free")},
+                    "remember_token": remember_token})
+
+@app.route("/api/auth/resume", methods=["POST"])
+def auth_resume():
+    """Re-establish a session using a remember token stored in the browser."""
+    d = request.get_json() or {}
+    uid = (d.get("user_id") or "").strip()
+    token = (d.get("remember_token") or "").strip()
+    if not uid or not token:
+        return jsonify({"authenticated": False}), 401
+    user = _load_user_by_id(uid)
+    if not user:
+        return jsonify({"authenticated": False}), 401
+    stored = user.get("remember_tokens", [])
+    hashed = _hash_remember_token(token)
+    if hashed not in stored:
+        return jsonify({"authenticated": False}), 401
+    session.permanent = True
+    session["user_id"] = user["id"]
+    session["email"] = user["email"]
+    profile = load_profile()
+    return jsonify({"authenticated": True, "user": {
+        "id": user["id"], "email": user["email"], "name": user["name"],
+        "theme": user.get("theme", "dark"), "provider": user.get("provider", "local"),
+        "created": user.get("created"), "plan": user.get("plan", "free")},
+        "onboarding_complete": bool(profile.get("onboarding_complete"))})
 
 @app.route("/api/auth/github")
 def auth_github_start():

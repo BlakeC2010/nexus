@@ -90,6 +90,41 @@ function retryMsg(btn){
   sendMessage();
 }
 
+// ─── Auto Resume ──────────────────────────────────
+async function tryAutoResume(){
+  // Try to resume an authenticated session using a stored remember token
+  const savedUid=localStorage.getItem('nexus_uid');
+  const savedToken=localStorage.getItem('nexus_remember');
+  if(savedUid && savedToken){
+    try{
+      const r=await fetch('/api/auth/resume',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({user_id:savedUid,remember_token:savedToken})});
+      const d=await r.json();
+      if(d.authenticated){
+        curUser=d.user; curUser.plan=d.user.plan||'free';
+        theme=d.user.theme||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
+        applyTheme(false);
+        onboardingChecked=!!d.onboarding_complete;
+        return true;
+      }
+    }catch{}
+  }
+  // Try to resume a guest session using stored guest_id
+  const savedGid=localStorage.getItem('nexus_guest_id');
+  if(savedGid){
+    try{
+      const r=await fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({guest_id:savedGid})});
+      const d=await r.json();
+      if(d.ok){
+        isGuest=true; curUser={name:'Guest',email:'',plan:'guest'};
+        return true;
+      }
+    }catch{}
+  }
+  return false;
+}
+
 // ─── Init ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',async()=>{
   if(!localStorage.getItem('nexus_theme_override')){
@@ -107,11 +142,17 @@ document.addEventListener('DOMContentLoaded',async()=>{
     isGuest=true; curUser={name:'Guest',email:'',plan:'guest'};
     showApp();
   } else {
-    try{const o=await fetch('/api/oauth-config').then(r=>r.json());
-      googleClientId=o.google_client_id||'';
-    }catch{}
-    document.getElementById('loginPage').style.display='flex';
-    initGoogleAuthUI();
+    // Session lost — try to resume from localStorage
+    const resumed = await tryAutoResume();
+    if(resumed){
+      showApp();
+    } else {
+      try{const o=await fetch('/api/oauth-config').then(r=>r.json());
+        googleClientId=o.google_client_id||'';
+      }catch{}
+      document.getElementById('loginPage').style.display='flex';
+      initGoogleAuthUI();
+    }
   }
   initDropzone();
   refreshModeMenuUI();
@@ -593,6 +634,12 @@ async function handleGoogleCred(resp){
     const d=await r.json();
     if(d.error){document.getElementById('loginErr').textContent=d.error;return}
     curUser=d.user; curUser.plan=d.user.plan||'free';
+    // Save remember token for auto-resume on session loss
+    if(d.remember_token && d.user.id){
+      localStorage.setItem('nexus_uid',d.user.id);
+      localStorage.setItem('nexus_remember',d.remember_token);
+      localStorage.removeItem('nexus_guest_id');
+    }
     theme=d.user.theme||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
     applyTheme(false); onboardingChecked=false; showApp();
   }catch(e){document.getElementById('loginErr').textContent='Google auth failed'}
@@ -600,9 +647,15 @@ async function handleGoogleCred(resp){
 
 async function guestLogin(){
   try{
-    const r=await fetch('/api/auth/guest',{method:'POST'});
+    const prevGid=localStorage.getItem('nexus_guest_id')||'';
+    const r=await fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({guest_id:prevGid})});
     const d=await r.json();
-    if(d.ok){isGuest=true;curUser={name:'Guest',email:'',plan:'guest'};showApp();}
+    if(d.ok){
+      isGuest=true;curUser={name:'Guest',email:'',plan:'guest'};
+      if(d.guest_id) localStorage.setItem('nexus_guest_id',d.guest_id);
+      showApp();
+    }
     else document.getElementById('loginErr').textContent=d.error||'Guest login failed';
   }catch(e){document.getElementById('loginErr').textContent='Guest login failed'}
 }
@@ -611,6 +664,9 @@ async function signOut(){
   const ok=await _dlg({title:'Sign out',msg:'Are you sure you want to sign out of Nexus?',icon:'⏻',iconType:'warn',confirmText:'Sign out',cancelText:'Cancel'});
   if(!ok)return;
   await fetch('/api/auth/logout',{method:'POST'});
+  localStorage.removeItem('nexus_uid');
+  localStorage.removeItem('nexus_remember');
+  localStorage.removeItem('nexus_guest_id');
   curUser=null;curChat=null;allChats=[];isGuest=false;
   onboardingChecked=false;
   hideSetupReminder();
@@ -808,7 +864,23 @@ async function newFolder(){
 
 async function openChat(id){
   curChat=id;
-  const r=await fetch(`/api/chats/${id}`);const chat=await r.json();
+  const r=await fetch(`/api/chats/${id}`);
+  if(!r.ok){
+    // Chat no longer exists on server — remove from list and go to welcome
+    showToast('Chat not found. It may have been deleted.','info');
+    curChat=null;
+    await refreshChats();
+    loadWelcome(true);
+    return;
+  }
+  const chat=await r.json();
+  if(chat.error){
+    showToast('Chat not found.','info');
+    curChat=null;
+    await refreshChats();
+    loadWelcome(true);
+    return;
+  }
   document.getElementById('topTitle').textContent=chat.title||'New Chat';
   if(chat.model){
     const opts=document.querySelectorAll('.cms-opt');
@@ -1356,6 +1428,21 @@ async function sendMessage(){
         return;
       }
       if(d.error){
+        // If chat was not found, re-create it and retry once
+        if(response.status===404 && !sendMessage._retried){
+          sendMessage._retried=true;
+          msgDiv.remove();
+          setChatRunning(targetChatId,false);
+          curChat=null;
+          await createChat(pendingFolder||'');
+          document.getElementById('msgInput').value=text;
+          pendingFiles=files;
+          renderPF();
+          await sendMessage();
+          sendMessage._retried=false;
+          return;
+        }
+        sendMessage._retried=false;
         if(canRender())contentEl.innerHTML=`<div style="color:var(--red)">${esc(d.error)}</div>`;
         setChatRunning(targetChatId,false);
         return;
