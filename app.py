@@ -720,7 +720,9 @@ Capabilities:
 6. GENERATE mind maps in ```mermaid blocks
 7. ANALYZE uploaded files
 8. IDENTIFY FRICTION — notice what's slowing the user down and suggest fixes
-9. Multiple-choice (VERY rarely — only for genuine branching decisions where the user is stuck and there are 2-4 clearly distinct paths that would lead to very different outcomes). DO NOT use choices for:
+9. INCLUDE IMAGES — when useful, include images in your responses using markdown: ![description](https://image-url). Use this for explanations, tutorials, diagrams from the web, or when the user asks to see something visual. Find real image URLs from your knowledge or web search results.
+10. ANALYZE YOUTUBE VIDEOS — when the user shares a YouTube link, you can watch/analyze the video content and discuss it in detail. The video is provided to you directly.
+11. Multiple-choice (VERY rarely — only for genuine branching decisions where the user is stuck and there are 2-4 clearly distinct paths that would lead to very different outcomes). DO NOT use choices for:
    - Asking clarifying questions
    - Acknowledging a request before doing it
    - Offering to help in different ways
@@ -735,7 +737,7 @@ Option A text
 Option B text
 <<<END_CHOICES>>>
 
-10. Tool mode prefixes — the user may start a message with a tool prefix:
+12. Tool mode prefixes — the user may start a message with a tool prefix:
 - [Use Canvas]: Put ALL code or document content in a single ```language code block so it opens in the side canvas editor. Do NOT add explanation around the code — just the code block with a brief intro line.
 - [Search the web]: Reference your knowledge or provide the most current info available, citing sources when possible.
 - [Create a mind map]: Immediately generate a ```mermaid mindmap block for the topic. Do not ask for the topic — use whatever subject is most relevant from context or the message. If the message says "about a topic I choose" just pick the most interesting topic you know about.
@@ -852,6 +854,16 @@ def clean_response(text):
     text = re.sub(r'<<<MEMORY_ADD:\s*.+?>>>', '', text)
     return text.strip()
 
+_YT_RE = re.compile(r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{11})')
+
+def _extract_youtube_urls(text):
+    """Return list of full YouTube URLs found in text."""
+    urls = []
+    for m in _YT_RE.finditer(text or ""):
+        vid = m.group(1)
+        urls.append(f"https://www.youtube.com/watch?v={vid}")
+    return urls
+
 def _google_contents_from_messages(messages, types):
     contents = []
     for msg in messages:
@@ -859,6 +871,12 @@ def _google_contents_from_messages(messages, types):
         parts = []
         if msg.get("text"):
             parts.append(types.Part.from_text(text=msg["text"]))
+        # YouTube URLs → Gemini FileData so the model can watch the video
+        for yt_url in msg.get("youtube_urls", []):
+            try:
+                parts.append(types.Part.from_uri(file_uri=yt_url, mime_type="video/*"))
+            except Exception:
+                pass
         for img in msg.get("images", []):
             try:
                 parts.append(types.Part.from_bytes(data=base64.b64decode(img["data"]), mime_type=img["mime"]))
@@ -940,6 +958,11 @@ def prepare_chat_turn(chat, payload):
         thinking = _detect_complex_query(user_text)
     if not web_search and "[search the web]" in user_text.lower():
         web_search = True
+
+    # --- YouTube URL detection ---
+    yt_urls = _extract_youtube_urls(user_text)
+    if yt_urls:
+        user_msg["youtube_urls"] = yt_urls
 
     # --- Workspace context: inject only relevant files (capped at 40k chars) ---
     all_files = read_workspace_files()

@@ -1521,6 +1521,13 @@ function fmt(text){
     blocks.push(`<pre style="background:var(--bg-deep);padding:14px 16px;border-radius:var(--r-sm);overflow-x:auto;font-family:var(--mono);font-size:11.5px;margin:10px 0;border:1px solid var(--border);line-height:1.65"><code>${c}</code></pre><button class="canvas-btn" onclick="openCanvas(window['_cblk${bid}'],'${(l||'Code').replace(/'/g,'')}',true)">✏️ Edit in Canvas</button>`);
     return `%%%BLOCK${blocks.length-1}%%%`;
   });
+  // Markdown images: ![alt](url)
+  t=t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g,(_,alt,url)=>{
+    blocks.push(`<div style="margin:10px 0"><img src="${url}" alt="${alt.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}" style="max-width:100%;border-radius:var(--r-md);box-shadow:var(--shadow-sm)" loading="lazy" onerror="this.style.display='none'"></div>`);
+    return `%%%BLOCK${blocks.length-1}%%%`;
+  });
+  // Markdown links: [text](url) — but not images (already handled)
+  t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   t=t.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   t=t.replace(/`(.+?)`/g,'<code style="background:var(--bg-surface);padding:2px 7px;border-radius:4px;font-family:var(--mono);font-size:11.5px;border:1px solid var(--border)">$1</code>');
   t=t.replace(/\n/g,'<br>');
