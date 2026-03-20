@@ -14,6 +14,9 @@ let canvasTabs=[];
 let activeCanvasTabId=null;
 const _thinkPhrases=['Thinking this through...','Working on it...','Pulling ideas together...','Reasoning carefully...','Analyzing your request...','Finding the best approach...'];
 let _thinkInterval=null;
+const ONB_SKIP_KEY='nexus_onboarding_skipped';
+const ONB_NO_REMIND_KEY='nexus_onboarding_no_remind';
+const ONB_DISMISS_KEY='nexus_onboarding_reminder_dismissed';
 
 function startThinkingPhrases(el){
   let i=0;
@@ -362,6 +365,7 @@ async function signOut(){
   await fetch('/api/auth/logout',{method:'POST'});
   curUser=null;curChat=null;allChats=[];isGuest=false;
   onboardingChecked=false;
+  hideSetupReminder();
   document.getElementById('appPage').classList.remove('visible');
   document.getElementById('loginPage').style.display='flex';
   document.getElementById('loginErr').textContent='';
@@ -376,10 +380,73 @@ async function ensureOnboarding(force=false){
     const r=await fetch('/api/profile-onboarding');
     const d=await r.json();
     onboardingChecked=!!d.onboarding_complete;
-    if(!onboardingChecked){
+    if(onboardingChecked){
+      localStorage.removeItem(ONB_SKIP_KEY);
+      localStorage.removeItem(ONB_NO_REMIND_KEY);
+      sessionStorage.removeItem(ONB_DISMISS_KEY);
+      hideSetupReminder();
+      if(force){
+        openOnboarding(d.profile||{});
+      }
+      return;
+    }
+    const skipped=localStorage.getItem(ONB_SKIP_KEY)==='1';
+    const noRemind=localStorage.getItem(ONB_NO_REMIND_KEY)==='1';
+    const dismissed=sessionStorage.getItem(ONB_DISMISS_KEY)==='1';
+    if(force||!skipped){
       openOnboarding(d.profile||{});
+      hideSetupReminder();
+      return;
+    }
+    if(!noRemind&&!dismissed){
+      showSetupReminder();
+    }else{
+      hideSetupReminder();
     }
   }catch{}
+}
+
+function showSetupReminder(){
+  const bar=document.getElementById('setupReminder');
+  if(!bar)return;
+  bar.style.display='flex';
+}
+
+function hideSetupReminder(){
+  const bar=document.getElementById('setupReminder');
+  if(!bar)return;
+  bar.style.display='none';
+}
+
+function dismissSetupReminder(){
+  const noRemind=!!document.getElementById('setupDoNotRemind')?.checked;
+  if(noRemind){
+    localStorage.setItem(ONB_NO_REMIND_KEY,'1');
+  }
+  sessionStorage.setItem(ONB_DISMISS_KEY,'1');
+  hideSetupReminder();
+}
+
+function openSetupFromReminder(){
+  sessionStorage.removeItem(ONB_DISMISS_KEY);
+  localStorage.removeItem(ONB_NO_REMIND_KEY);
+  hideSetupReminder();
+  ensureOnboarding(true);
+}
+
+function openSetupFromSettings(){
+  closeM('settingsModal');
+  sessionStorage.removeItem(ONB_DISMISS_KEY);
+  ensureOnboarding(true);
+}
+
+function skipOnboarding(){
+  localStorage.setItem(ONB_SKIP_KEY,'1');
+  document.getElementById('onboardingModal').classList.remove('open');
+  const noRemind=localStorage.getItem(ONB_NO_REMIND_KEY)==='1';
+  if(!noRemind){
+    showSetupReminder();
+  }
 }
 
 function openOnboarding(profile={}){
@@ -414,6 +481,10 @@ async function submitOnboarding(){
       return;
     }
     onboardingChecked=true;
+    localStorage.removeItem(ONB_SKIP_KEY);
+    localStorage.removeItem(ONB_NO_REMIND_KEY);
+    sessionStorage.removeItem(ONB_DISMISS_KEY);
+    hideSetupReminder();
     if(curUser){curUser.name=(d.user?.name||preferred_name);updateUserUI();}
     document.getElementById('onboardingModal').classList.remove('open');
     showToast('Setup complete. Nexus is personalized for you.','success');

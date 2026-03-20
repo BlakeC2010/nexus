@@ -89,6 +89,17 @@
     </div>
   </div>
 
+  <div class="setup-reminder" id="setupReminder" style="display:none">
+    <div class="sr-left">
+      <div class="sr-title">Complete your quick setup for better personalization.</div>
+      <label class="sr-check"><input type="checkbox" id="setupDoNotRemind"> Do not remind again</label>
+    </div>
+    <div class="sr-actions">
+      <button onclick="openSetupFromReminder()">Set up now</button>
+      <button class="ghost" onclick="dismissSetupReminder()">✕</button>
+    </div>
+  </div>
+
   <div class="chat-area" id="chatArea">
     <div class="welcome" id="welcomeEl">
       <h2 id="greeting">Good evening.</h2>
@@ -157,6 +168,7 @@
     <p class="st">👤 Profile</p>
     <label>Display Name</label>
     <div class="kr"><input type="text" id="profileName" placeholder="Your name"><button onclick="saveName()">Save</button></div>
+    <div class="kr" style="margin-top:8px"><button onclick="openSetupFromSettings()">Open Setup Wizard</button></div>
     <hr>
     <p class="st">🎨 Appearance</p>
     <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
@@ -281,7 +293,10 @@
       </div>
     </div>
     <div class="onb-err" id="onbErr"></div>
-    <div class="onb-actions"><button class="onb-save" id="onbSaveBtn" onclick="submitOnboarding()">Save and continue</button></div>
+    <div class="onb-actions">
+      <button class="onb-skip" onclick="skipOnboarding()">Skip for now</button>
+      <button class="onb-save" id="onbSaveBtn" onclick="submitOnboarding()">Save and continue</button>
+    </div>
   </div>
 </div>
 </div>
