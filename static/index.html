@@ -239,19 +239,19 @@
   <div class="mb">
     <!-- Phase 1: Query Input -->
     <div id="researchPhase1">
-      <p class="hint">Multi-step web research with source reading, synthesis, and export to markdown/PDF.</p>
-      <label>Research Question</label>
-      <textarea id="researchQuery" rows="4" style="width:100%;padding:10px 12px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--bg-deep);resize:vertical;min-height:98px;outline:none" placeholder="Example: Analyze the latest state of edge AI chips in 2026, major vendors, benchmarks, costs, and near-term trends."></textarea>
-      <div class="research-grid" style="margin-top:10px">
+      <p class="research-hint">Multi-step web research with source reading, synthesis, and export to markdown/PDF.</p>
+      <label class="research-label">Research Question</label>
+      <textarea id="researchQuery" class="research-textarea" rows="5" placeholder="Example: Analyze the latest state of edge AI chips in 2026, major vendors, benchmarks, costs, and near-term trends."></textarea>
+      <div class="research-grid">
         <div>
-          <label>Depth</label>
+          <label class="research-label">Depth</label>
           <select id="researchDepth">
             <option value="quick">Quick (faster)</option>
             <option value="standard" selected>Standard (balanced)</option>
             <option value="deep">Deep (most detailed)</option>
           </select>
         </div>
-        <button onclick="generateResearchPlan()" id="researchPlanBtn">Generate Plan</button>
+        <button class="research-plan-btn" onclick="generateResearchPlan()" id="researchPlanBtn">Generate Plan</button>
       </div>
       <div class="research-summary">
         Tip: Click <strong>Generate Plan</strong> to review the investigation strategy before research begins. You can edit or approve it.
@@ -263,18 +263,18 @@
         <div class="research-plan-badge">📋 Research Plan</div>
         <div class="research-plan-query" id="researchPlanQuery"></div>
       </div>
-      <p class="hint" style="margin:8px 0">Review and edit the investigation angles below. Add, remove, or reword any angle, then confirm to begin.</p>
-      <textarea id="researchPlanEditor" rows="10" style="width:100%;padding:12px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--bg-deep);resize:vertical;min-height:180px;outline:none;font-size:12px;line-height:1.7;font-family:inherit"></textarea>
-      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
-        <button onclick="backToResearchInput()" style="padding:8px 16px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);font-size:12px;cursor:pointer">← Back</button>
-        <button onclick="confirmResearchPlan()" style="padding:8px 20px;border-radius:var(--r-sm);border:none;background:var(--accent);color:#fff;font-size:12px;font-weight:600;cursor:pointer">Confirm & Start Research →</button>
+      <p class="research-plan-hint">Review and edit the investigation angles below. Add, remove, or reword any angle, then confirm to begin.</p>
+      <textarea id="researchPlanEditor" class="research-plan-editor" rows="12"></textarea>
+      <div class="research-plan-actions">
+        <button class="research-btn-back" onclick="backToResearchInput()">← Back</button>
+        <button class="research-btn-confirm" onclick="confirmResearchPlan()">Confirm & Start Research →</button>
       </div>
     </div>
     <!-- Phase loading -->
     <div id="researchPhaseLoading" style="display:none">
-      <div style="text-align:center;padding:30px 0">
+      <div class="research-loading">
         <div class="dots" style="display:inline-flex"><span></span><span></span><span></span></div>
-        <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">Generating research plan...</div>
+        <div class="research-loading-text">Generating research plan...</div>
       </div>
     </div>
   </div>

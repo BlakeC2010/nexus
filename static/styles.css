@@ -514,6 +514,83 @@ body.light .chat-area::before{
   100%{opacity:1;filter:blur(0);transform:translateY(0)}
 }
 
+/* ── Live Thinking Panel ── */
+.live-think-panel{
+  border-radius:var(--r-md);border:1px solid var(--border);
+  background:var(--bg-surface);overflow:hidden;margin-bottom:10px;
+  animation:ltpIn .4s var(--ease-spring-snappy) both;
+  position:relative;
+}
+.live-think-panel::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  background-size:200% 100%;
+  animation:thinkBarSweep 2s ease-in-out infinite;
+}
+.live-think-panel.ltp-done::before{animation:none;background:var(--accent);opacity:.3}
+@keyframes ltpIn{
+  from{opacity:0;transform:translateY(10px) scale(.97);max-height:0}
+  to{opacity:1;transform:translateY(0) scale(1);max-height:600px}
+}
+.ltp-header{
+  display:flex;align-items:center;gap:8px;padding:10px 14px;
+  font-size:12px;font-weight:600;color:var(--text-muted);
+  border-bottom:1px solid var(--border-subtle);
+}
+.ltp-icon{font-size:14px}
+.ltp-label{flex:1}
+.ltp-dots{display:flex;gap:4px;align-items:center}
+.ltp-dots span{width:4px;height:4px;border-radius:50%;background:var(--accent);animation:dotWave 1.8s cubic-bezier(.4,0,.2,1) infinite;opacity:.25}
+.ltp-dots span:nth-child(1){animation-delay:0s}
+.ltp-dots span:nth-child(2){animation-delay:.2s}
+.ltp-dots span:nth-child(3){animation-delay:.4s}
+.ltp-body{padding:12px 14px;max-height:200px;overflow-y:auto}
+.ltp-text{
+  font-size:12px;line-height:1.7;color:var(--text-muted);
+  font-family:var(--mono);white-space:pre-wrap;
+  animation:ltpTextIn .3s ease both;
+}
+@keyframes ltpTextIn{from{opacity:0}to{opacity:1}}
+.ltp-body::-webkit-scrollbar{width:3px}
+.ltp-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:3px}
+
+/* ── Stream Response Area ── */
+.stream-response-area{
+  font-size:13.5px;line-height:1.75;color:var(--text-primary);
+  animation:streamAreaIn .35s var(--ease-out) both;
+}
+@keyframes streamAreaIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Stream Placeholders (mind map, todolist, code artifact) ── */
+.stream-placeholder{
+  margin:10px 0;padding:14px 18px;border-radius:var(--r-md);
+  border:1px solid var(--accent-border);background:var(--accent-dim);
+  display:flex;align-items:center;gap:10px;
+  font-size:12px;font-weight:500;color:var(--text-secondary);
+  position:relative;overflow:hidden;
+  animation:spIn .35s var(--ease-out) both;
+}
+.stream-placeholder::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent 0%,rgba(191,107,58,.08) 45%,rgba(191,107,58,.14) 50%,rgba(191,107,58,.08) 55%,transparent 100%);
+  background-size:250% 100%;
+  animation:artifactShimmer 2s ease-in-out infinite;
+}
+@keyframes spIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.sp-icon{font-size:16px;position:relative;z-index:1}
+.stream-placeholder>:not(.sp-icon){position:relative;z-index:1}
+
+/* ── Stream Inline Styles ── */
+.stream-code{
+  background:var(--bg-deep);padding:12px 14px;border-radius:var(--r-sm);
+  overflow-x:auto;font-family:var(--mono);font-size:11.5px;
+  margin:8px 0;border:1px solid var(--border);line-height:1.65;
+}
+.stream-inline-code{
+  background:var(--bg-surface);padding:2px 7px;border-radius:4px;
+  font-family:var(--mono);font-size:11.5px;border:1px solid var(--border);
+}
+
 .msg.user{
   align-self:flex-end;background:var(--bg-hover);color:var(--text-primary);
   border:1px solid var(--border-hover);border-bottom-right-radius:4px;
@@ -1010,14 +1087,83 @@ input[type="file"]{display:none}
 .reset-zone .kr input{flex:1}
 .reset-zone .kr button{background:rgba(248,113,113,.08);color:var(--red);border-color:rgba(248,113,113,.3)}
 
-/* Research modal */
-.research-modal{width:760px;max-width:94vw}
-.research-grid{display:grid;grid-template-columns:1fr 170px;gap:10px;align-items:end}
+/* ══════════════════════════════════════════════════
+   DEEP RESEARCH MODAL
+   ══════════════════════════════════════════════════ */
+.research-modal{width:920px;max-width:96vw}
+.research-modal .mh{padding:20px 28px 16px;border-bottom:1px solid var(--border)}
+.research-modal .mh h3{font-size:18px;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+.research-modal .mb{padding:24px 28px 28px}
+
+/* Phase 1 — query input */
+.research-hint{font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:20px}
+.research-label{display:block;font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:8px;letter-spacing:.02em;text-transform:uppercase}
+.research-textarea{
+  width:100%;padding:14px 16px;border-radius:var(--r-md);border:1px solid var(--border);
+  background:var(--bg-deep);resize:vertical;min-height:120px;outline:none;
+  font-size:14px;line-height:1.65;color:var(--text-primary);font-family:inherit;
+  transition:border-color .2s var(--ease),box-shadow .2s var(--ease);
+}
+.research-textarea::placeholder{color:var(--text-muted)}
+.research-textarea:focus{border-color:var(--accent-border);box-shadow:0 0 0 3px var(--accent-dim)}
+.research-grid{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end;margin-top:16px}
+.research-grid select{
+  padding:10px 14px;border-radius:var(--r-md);border:1px solid var(--border);
+  background:var(--bg-deep);color:var(--text-primary);font-size:13px;outline:none;
+  transition:border-color .2s var(--ease);
+}
+.research-grid select:focus{border-color:var(--accent-border)}
+.research-plan-btn{
+  padding:11px 28px;border-radius:var(--r-md);border:none;
+  background:var(--accent);color:#fff;font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .2s var(--ease);white-space:nowrap;
+}
+.research-plan-btn:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.research-plan-btn:active{filter:brightness(.92);transform:translateY(0)}
+.research-plan-btn:disabled{opacity:.45;cursor:not-allowed;transform:none;filter:none}
+.research-summary{margin-top:18px;padding:14px 16px;border-radius:var(--r-md);background:var(--bg-deep);border:1px solid var(--border);font-size:12px;color:var(--text-secondary);line-height:1.6}
+
+/* Phase 2 — plan review */
+.research-plan-header{margin-bottom:14px}
+.research-plan-badge{
+  display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;
+  border:1px solid var(--accent-border);background:var(--accent-dim);
+  font-size:12px;font-weight:600;color:var(--accent);
+}
+.research-plan-query{margin-top:10px;font-size:15px;font-weight:600;color:var(--text-primary);line-height:1.55}
+.research-plan-hint{font-size:12px;color:var(--text-secondary);margin:12px 0 14px;line-height:1.55}
+.research-plan-editor{
+  width:100%;padding:16px 18px;border-radius:var(--r-md);border:1px solid var(--border);
+  background:var(--bg-deep);resize:vertical;min-height:240px;outline:none;
+  font-size:13px;line-height:1.75;font-family:inherit;color:var(--text-primary);
+  transition:border-color .2s var(--ease),box-shadow .2s var(--ease);
+}
+.research-plan-editor:focus{border-color:var(--accent-border);box-shadow:0 0 0 3px var(--accent-dim)}
+.research-plan-actions{display:flex;gap:10px;margin-top:18px;justify-content:flex-end}
+.research-btn-back{
+  padding:10px 22px;border-radius:var(--r-md);border:1px solid var(--border);
+  background:var(--bg-surface);color:var(--text-secondary);font-size:13px;font-weight:500;
+  cursor:pointer;transition:all .2s var(--ease);
+}
+.research-btn-back:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-hover)}
+.research-btn-confirm{
+  padding:10px 28px;border-radius:var(--r-md);border:none;
+  background:var(--accent);color:#fff;font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .2s var(--ease);
+}
+.research-btn-confirm:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.research-btn-confirm:active{filter:brightness(.92);transform:translateY(0)}
+
+/* Phase loading */
+.research-loading{text-align:center;padding:48px 0}
+.research-loading-text{margin-top:14px;font-size:13px;color:var(--text-muted)}
+
+/* Research log */
 .research-log{margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-surface);font-size:11px;line-height:1.55;max-height:220px;overflow:auto;color:var(--text-secondary)}
 .research-log .rline{padding:4px 0;border-bottom:1px dashed var(--border)}
 .research-log .rline:last-child{border-bottom:none}
 
-/* Research progress bar */
+/* Research progress bar (in-chat) */
 .research-progress{margin-top:16px;padding:16px 18px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg-surface)}
 .research-progress-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .research-progress-title{font-size:12px;font-weight:600;color:var(--text-primary)}
@@ -1042,12 +1188,6 @@ input[type="file"]{display:none}
 @keyframes research-activity-blink{0%,100%{opacity:1}50%{opacity:.3}}
 .research-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .research-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--border);font-size:10px;color:var(--text-muted);background:var(--bg-deep)}
-.research-summary{margin-top:10px;padding:10px;border-radius:var(--r-sm);background:var(--bg-deep);border:1px solid var(--border);font-size:11px;color:var(--text-secondary)}
-
-/* Research plan phase */
-.research-plan-header{margin-bottom:6px}
-.research-plan-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--accent-border);background:var(--accent-dim);font-size:11px;font-weight:600;color:var(--accent)}
-.research-plan-query{margin-top:6px;font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.5}
 
 /* Research stop / regen buttons */
 .research-stop-btn{display:block;margin:12px auto 0;padding:7px 20px;border-radius:var(--r-sm);border:1px solid rgba(248,113,113,.3);background:rgba(248,113,113,.08);color:#f87171;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s var(--ease)}
@@ -1055,8 +1195,29 @@ input[type="file"]{display:none}
 .research-regen-btn{display:block;margin:12px auto 0;padding:7px 20px;border-radius:var(--r-sm);border:1px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s var(--ease)}
 .research-regen-btn:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-hover)}
 
-/* Research modal wider for plan view */
-.research-modal{max-width:560px}
+/* ── Inline Research Plan Card (in-chat) ── */
+.ri-card{
+  border:1px solid var(--border);border-radius:var(--r-lg);
+  background:var(--bg-surface);padding:22px 24px;
+  animation:riCardIn .4s var(--ease-spring-snappy) both;
+}
+.ri-card-error{border-color:rgba(248,113,113,.25)}
+@keyframes riCardIn{from{opacity:0;transform:translateY(12px) scale(.97)}to{opacity:1;transform:none}}
+.ri-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ri-depth{font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--border);background:var(--bg-deep);color:var(--text-muted);font-weight:500;text-transform:capitalize}
+.ri-query{margin-top:12px;font-size:15px;font-weight:600;color:var(--text-primary);line-height:1.55}
+.ri-loading{display:flex;align-items:center;gap:10px;margin-top:18px;font-size:13px;color:var(--text-muted)}
+.ri-angles{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.ri-angle{display:flex;align-items:baseline;gap:10px;padding:10px 14px;border-radius:var(--r-md);background:var(--bg-deep);border:1px solid var(--border);font-size:13px;color:var(--text-secondary);line-height:1.55;transition:border-color .15s var(--ease)}
+.ri-angle:hover{border-color:var(--border-hover)}
+.ri-angle-num{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:var(--accent-dim);color:var(--accent);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ri-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end;flex-wrap:wrap}
+.ri-btn-canvas{
+  padding:10px 22px;border-radius:var(--r-md);border:1px solid var(--accent-border);
+  background:var(--accent-dim);color:var(--accent);font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .2s var(--ease);
+}
+.ri-btn-canvas:hover{background:var(--accent);color:#fff}
 
 /* Productivity hub */
 .prod-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}

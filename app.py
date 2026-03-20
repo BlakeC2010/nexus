@@ -1462,7 +1462,18 @@ def call_google(api_key, model, sysprompt, messages, base_url=None, thinking=Fal
         cfg["tools"] = [types.Tool(google_search=types.GoogleSearch())]
     r = client.models.generate_content(model=model, contents=contents,
         config=types.GenerateContentConfig(**cfg))
-    return r.text
+    # Extract thinking parts if present
+    result_parts = []
+    try:
+        for candidate in (r.candidates or []):
+            for part in (candidate.content.parts or []):
+                if getattr(part, "thought", False) and part.text:
+                    result_parts.append(f"<<<THINKING>>>\n{part.text}\n<<<END_THINKING>>>\n")
+                elif part.text:
+                    result_parts.append(part.text)
+    except Exception:
+        return r.text
+    return "".join(result_parts) if result_parts else (r.text or "")
 
 def call_google_stream(api_key, model, sysprompt, messages, base_url=None, thinking=False, web_search=False, **kwargs):
     genai, types = _import_google()
@@ -1479,9 +1490,19 @@ def call_google_stream(api_key, model, sysprompt, messages, base_url=None, think
         config=types.GenerateContentConfig(**cfg),
     )
     for chunk in stream:
-        text = getattr(chunk, "text", "") or ""
-        if text:
-            yield text
+        # Check for thinking parts in candidates
+        try:
+            for candidate in (chunk.candidates or []):
+                for part in (candidate.content.parts or []):
+                    if getattr(part, "thought", False) and part.text:
+                        yield {"__thinking__": True, "text": part.text}
+                        continue
+                    if part.text:
+                        yield part.text
+        except (AttributeError, TypeError):
+            text = getattr(chunk, "text", "") or ""
+            if text:
+                yield text
 
 def call_openai(api_key, model, sysprompt, messages, base_url=None, web_search=False, **kwargs):
     openai = _import_openai()
@@ -1583,16 +1604,27 @@ def call_anthropic_stream(api_key, model, sysprompt, messages, base_url=None, th
         if msg.get("text"): parts.append({"type": "text", "text": msg["text"]})
         if parts: msgs.append({"role": role, "content": parts})
     if thinking:
-        # Use blocking create() to get native thinking blocks, then yield them
-        r = client.messages.create(
+        # Stream with thinking enabled — iterate raw events
+        with client.messages.stream(
             model=model, max_tokens=64000, system=sysprompt, messages=msgs,
             thinking={"type": "enabled", "budget_tokens": 8000}
-        )
-        for block in r.content:
-            if block.type == "thinking" and getattr(block, "thinking", None):
-                yield f"<<<THINKING>>>\n{block.thinking}\n<<<END_THINKING>>>\n"
-            elif block.type == "text" and block.text:
-                yield block.text
+        ) as s:
+            current_block_type = None
+            for event in s:
+                etype = getattr(event, "type", "")
+                if etype == "content_block_start":
+                    block = getattr(event, "content_block", None)
+                    current_block_type = getattr(block, "type", "") if block else ""
+                elif etype == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta:
+                        dt = getattr(delta, "type", "")
+                        if dt == "thinking_delta":
+                            yield {"__thinking__": True, "text": getattr(delta, "thinking", "")}
+                        elif dt == "text_delta":
+                            yield getattr(delta, "text", "")
+                elif etype == "content_block_stop":
+                    current_block_type = None
     else:
         with client.messages.stream(model=model, max_tokens=64000, system=sysprompt, messages=msgs) as stream:
             for text in stream.text_stream:
@@ -2162,6 +2194,7 @@ def chat_message_stream(chat_id):
     @stream_with_context
     def generate():
         pieces = []
+        thinking_pieces = []
         try:
             stream_fn = STREAM_PROVIDERS.get(resolved["provider"])
             if stream_fn:
@@ -2174,6 +2207,12 @@ def chat_message_stream(chat_id):
                     thinking=thinking,
                     web_search=web_search,
                 ):
+                    # Check if chunk is a thinking dict from google/anthropic
+                    if isinstance(chunk, dict) and chunk.get("__thinking__"):
+                        thinking_pieces.append(chunk["text"])
+                        if chunk["text"]:
+                            yield event({"type": "thinking_delta", "text": chunk["text"]})
+                        continue
                     pieces.append(chunk)
                     yield event({"type": "delta", "text": chunk})
             else:
@@ -2190,6 +2229,11 @@ def chat_message_stream(chat_id):
                 yield event({"type": "delta", "text": full})
 
             raw_text = "".join(pieces)
+            # Prepend thinking content if we got structured thinking from the API
+            if thinking_pieces:
+                think_text = "".join(thinking_pieces).strip()
+                if think_text:
+                    raw_text = f"<<<THINKING>>>\n{think_text}\n<<<END_THINKING>>>\n{raw_text}"
             # Check if AI triggered deep research
             raw_text, research_query = extract_research_trigger(raw_text)
             # Safety net: if user clearly asked for research and AI forgot the tag, auto-trigger

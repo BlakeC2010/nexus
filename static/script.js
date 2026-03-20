@@ -1444,6 +1444,144 @@ function regenerateResearch(query){
   sendMessage();
 }
 
+/* ─── Inline Research Plan (in-chat + canvas) ─────── */
+let _inlineResearchState=null; // {query, depth, cardEl, contentEl}
+
+async function startInlineResearchPlan(query,depth){
+  depth=depth||deepResearchDepth||'standard';
+  const area=document.getElementById('chatArea');
+
+  // Create inline plan card in chat
+  const msgDiv=document.createElement('div');
+  msgDiv.className='msg kairo';
+  const contentEl=document.createElement('div');
+  contentEl.className='msg-content';
+  msgDiv.innerHTML='<div class="lbl">Nexus</div>';
+  msgDiv.appendChild(contentEl);
+  area.appendChild(msgDiv);
+  area.scrollTop=area.scrollHeight;
+
+  // Loading state
+  contentEl.innerHTML=`
+    <div class="ri-card">
+      <div class="ri-header">
+        <span class="research-plan-badge">🧪 Deep Research</span>
+        <span class="ri-depth">${esc(depth)}</span>
+      </div>
+      <div class="ri-query">${esc(query)}</div>
+      <div class="ri-loading">
+        <div class="dots" style="display:inline-flex"><span></span><span></span><span></span></div>
+        <span>Generating research plan...</span>
+      </div>
+    </div>`;
+
+  _inlineResearchState={query,depth,cardEl:msgDiv,contentEl};
+
+  try{
+    const r=await apiFetch('/api/research/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query,depth})});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||'Failed to generate plan.');
+
+    const angles=d.angles||[];
+    const planText=angles.map((a,i)=>`${i+1}. ${a}`).join('\n');
+    _inlineResearchState.planText=planText;
+    _inlineResearchState.angles=angles;
+
+    // Show plan preview in chat + open in canvas
+    const previewHtml=angles.map((a,i)=>`<div class="ri-angle"><span class="ri-angle-num">${i+1}</span>${esc(a)}</div>`).join('');
+    contentEl.innerHTML=`
+      <div class="ri-card">
+        <div class="ri-header">
+          <span class="research-plan-badge">📋 Research Plan</span>
+          <span class="ri-depth">${esc(depth)}</span>
+        </div>
+        <div class="ri-query">${esc(query)}</div>
+        <div class="ri-angles">${previewHtml}</div>
+        <div class="ri-actions">
+          <button class="research-btn-back" onclick="cancelInlineResearch()">Cancel</button>
+          <button class="ri-btn-canvas" onclick="editResearchPlanInCanvas()">✏️ Edit in Canvas</button>
+          <button class="research-btn-confirm" onclick="confirmInlineResearchPlan()">Confirm & Start Research →</button>
+        </div>
+      </div>`;
+    area.scrollTop=area.scrollHeight;
+
+    // Open plan in canvas for editing
+    openCanvas(planText,'Research Plan',false,{sourcePath:'__research_plan__',openPanel:true});
+  }catch(e){
+    contentEl.innerHTML=`
+      <div class="ri-card ri-card-error">
+        <div class="ri-header"><span class="research-plan-badge">🧪 Deep Research</span></div>
+        <div style="color:var(--red);margin-top:10px">${esc(e.message||'Failed to generate plan.')}</div>
+        <div class="ri-actions">
+          <button class="research-btn-back" onclick="cancelInlineResearch()">Dismiss</button>
+        </div>
+      </div>`;
+    _inlineResearchState=null;
+  }
+}
+
+function editResearchPlanInCanvas(){
+  if(!_inlineResearchState)return;
+  const tab=canvasTabs.find(t=>t.sourcePath==='__research_plan__');
+  if(tab){
+    switchCanvasTab(tab.id);
+  }else{
+    openCanvas(_inlineResearchState.planText||'','Research Plan',false,{sourcePath:'__research_plan__',openPanel:true});
+  }
+}
+
+async function confirmInlineResearchPlan(){
+  if(!_inlineResearchState)return;
+  // Read plan from canvas (may have been edited)
+  const tab=canvasTabs.find(t=>t.sourcePath==='__research_plan__');
+  let planText=tab?tab.content:(_inlineResearchState.planText||'');
+  if(!planText.trim()){showToast('Plan cannot be empty.','info');return;}
+
+  const {query,depth,contentEl}=_inlineResearchState;
+  _inlineResearchState=null;
+
+  // Close canvas plan tab
+  if(tab){
+    canvasTabs=canvasTabs.filter(t=>t.id!==tab.id);
+    if(activeCanvasTabId===tab.id){
+      if(canvasTabs.length)switchCanvasTab(canvasTabs[canvasTabs.length-1].id);
+      else closeCanvas();
+    }else{renderCanvasTabs();}
+  }
+
+  // Start research inline
+  const targetChatId=currentChat;
+  setChatRunning(targetChatId,true,{type:'research'});
+  const area=document.getElementById('chatArea');
+  try{
+    await runDeepResearch(query,contentEl,area,planText);
+    await refreshChats();
+  }catch(e){
+    contentEl.innerHTML=`<div style="color:var(--red)">${esc(e.message||'Research failed.')}</div>`;
+    setStatus('Research failed.');
+  }finally{
+    setChatRunning(targetChatId,false);
+  }
+}
+
+function cancelInlineResearch(){
+  if(_inlineResearchState&&_inlineResearchState.cardEl){
+    _inlineResearchState.cardEl.remove();
+  }
+  // Close canvas plan tab if open
+  const tab=canvasTabs.find(t=>t.sourcePath==='__research_plan__');
+  if(tab){
+    canvasTabs=canvasTabs.filter(t=>t.id!==tab.id);
+    if(activeCanvasTabId===tab.id){
+      if(canvasTabs.length)switchCanvasTab(canvasTabs[canvasTabs.length-1].id);
+      else closeCanvas();
+    }else{renderCanvasTabs();}
+  }
+  _inlineResearchState=null;
+  setStatus('Research cancelled.');
+}
+
 // ─── Messaging ────────────────────────────────────
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px'}
@@ -1458,6 +1596,62 @@ function stripMetaBlocks(text){
 
 function hasUnclosedCodeFence(text){
   return ((text||'').match(/```/g)||[]).length%2===1;
+}
+
+// Live markdown formatter for streaming — formats text in-flight
+function fmtLive(raw){
+  if(!raw)return'<span class="stream-cursor"></span>';
+  // Strip meta blocks (thinking/choices tags during stream)
+  let t=stripMetaBlocks(raw);
+  if(!t)return'<span class="stream-cursor"></span>';
+  let html=t;
+  // Escape HTML entities
+  html=html.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Detect special blocks mid-stream and show placeholders
+  // Unclosed mermaid block
+  if(/```mermaid\n/i.test(html)&&!(/```mermaid\n[\s\S]*?```/.test(html))){
+    html=html.replace(/```mermaid\n[\s\S]*$/,'<div class="stream-placeholder"><span class="sp-icon">🗺️</span> Generating mind map...</div>');
+  }
+  // Unclosed todolist block
+  if(/```todolist\n/i.test(html)&&!(/```todolist\n[\s\S]*?```/.test(html))){
+    html=html.replace(/```todolist\n[\s\S]*$/,'<div class="stream-placeholder"><span class="sp-icon">✅</span> Generating task list...</div>');
+  }
+  // Unclosed generic code block — show artifact generating
+  if(hasUnclosedCodeFence(html)){
+    // Get the language hint if present
+    const fenceMatch=html.match(/```(\w+)\n(?![\s\S]*```)/);
+    const lang=fenceMatch?fenceMatch[1]:'code';
+    const langLabel={'python':'Python','javascript':'JavaScript','js':'JavaScript','html':'HTML','css':'CSS','json':'JSON','markdown':'Markdown','md':'Markdown','sql':'SQL','bash':'Shell','sh':'Shell','typescript':'TypeScript','ts':'TypeScript'}[lang.toLowerCase()]||lang;
+    html=html.replace(/```\w*\n[^]*$/,'<div class="stream-placeholder"><span class="sp-icon">⚙</span> Writing '+esc(langLabel)+' artifact...</div>');
+  }
+
+  // Completed code blocks: render styled
+  html=html.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>{
+    return '<pre class="stream-code"><code>'+c+'</code></pre>';
+  });
+
+  // Bold
+  html=html.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  // Inline code
+  html=html.replace(/`(.+?)`/g,'<code class="stream-inline-code">$1</code>');
+  // Links
+  html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
+  // Headings (### at start of line)
+  html=html.replace(/^(#{1,3})\s+(.+)$/gm,(_,h,text)=>{
+    const level=h.length;
+    const sizes=['1.3em','1.15em','1.05em'];
+    return `<div style="font-size:${sizes[level-1]||'1em'};font-weight:700;margin:12px 0 4px;color:var(--text-primary)">${text}</div>`;
+  });
+  // Bullet lists  — * or - at start of line
+  html=html.replace(/^([*\-])\s+(.+)$/gm,'<div style="display:flex;gap:8px;padding:1px 0"><span style="color:var(--accent);flex-shrink:0">•</span><span>$2</span></div>');
+  // Numbered lists — 1. at start of line
+  html=html.replace(/^(\d+)\.\s+(.+)$/gm,'<div style="display:flex;gap:8px;padding:1px 0"><span style="color:var(--accent);flex-shrink:0;min-width:16px;text-align:right">$1.</span><span>$2</span></div>');
+  // Newlines
+  html=html.replace(/\n/g,'<br>');
+  // Add cursor at end
+  html+='<span class="stream-cursor"></span>';
+  return html;
 }
 
 function registerArtifact(entry){
@@ -1584,12 +1778,8 @@ async function sendMessage(){
     const planText=window._pendingResearchPlan||null;
     window._pendingResearchPlan=null;
     if(!planText){
-      // No plan yet — show the plan modal so user can review before starting
-      document.getElementById('researchQuery').value=text;
-      input.value=text; // keep it in the input
-      openResearchModal();
-      // Auto-trigger plan generation
-      generateResearchPlan();
+      // No plan yet — show inline plan card in chat + open in canvas
+      startInlineResearchPlan(text,deepResearchDepth);
       return;
     }
     setChatRunning(targetChatId,true,{type:'research'});
@@ -1660,7 +1850,23 @@ async function sendMessage(){
 
     const reader=response.body.getReader();
     const decoder=new TextDecoder();
-    let buffer='',fullText='';
+    let buffer='',fullText='',thinkText='',isThinking=false;
+
+    // Create a live thinking panel (hidden until we get thinking_delta)
+    let thinkPanel=null;
+    let thinkTextEl=null;
+    function ensureThinkPanel(){
+      if(thinkPanel)return;
+      const ta=contentEl.querySelector('.think-active');
+      if(ta)ta.remove();
+      stopThinkingPhrases();
+      thinkPanel=document.createElement('div');
+      thinkPanel.className='live-think-panel';
+      thinkPanel.innerHTML='<div class="ltp-header"><span class="ltp-icon">💭</span><span class="ltp-label">Thinking</span><span class="ltp-dots"><span></span><span></span><span></span></span></div><div class="ltp-body"><div class="ltp-text"></div></div>';
+      contentEl.innerHTML='';
+      contentEl.appendChild(thinkPanel);
+      thinkTextEl=thinkPanel.querySelector('.ltp-text');
+    }
 
     while(true){
       const{done,value}=await reader.read();
@@ -1673,17 +1879,58 @@ async function sendMessage(){
         if(!line)continue;
         try{
           const data=JSON.parse(line);
-          if(data.type==='delta'){
+          if(data.type==='thinking_delta'){
+            isThinking=true;
+            thinkText+=data.text;
+            if(canRender()){
+              ensureThinkPanel();
+              thinkTextEl.textContent=thinkText;
+              thinkTextEl.scrollTop=thinkTextEl.scrollHeight;
+              area.scrollTop=area.scrollHeight;
+            }
+          }else if(data.type==='delta'){
+            // Transition from thinking to response
+            if(isThinking&&thinkPanel){
+              isThinking=false;
+              thinkPanel.classList.add('ltp-done');
+              const dotsEl=thinkPanel.querySelector('.ltp-dots');
+              if(dotsEl)dotsEl.remove();
+              // Add response area below
+              const responseDiv=document.createElement('div');
+              responseDiv.className='stream-response-area';
+              contentEl.appendChild(responseDiv);
+            }
             stopThinkingPhrases();
             fullText+=data.text;
             if(canRender()){
-              const preview=esc(stripMetaBlocks(fullText));
-              const generating=hasUnclosedCodeFence(fullText)?'<div class="stream-state"><span class="ss-icon">⚙</span> Generating file artifact...</div>':'';
-              contentEl.innerHTML=`<div class="stream-preview">${preview||'...'}<span class="stream-cursor"></span></div>${generating}`;
+              const targetEl=contentEl.querySelector('.stream-response-area')||contentEl;
+              // First delta: remove thinking indicator if still present
+              const ta=contentEl.querySelector('.think-active');
+              if(ta){ta.remove();stopThinkingPhrases();}
+              targetEl.innerHTML=fmtLive(fullText);
               area.scrollTop=area.scrollHeight;
             }
           }else if(data.type==='done'){
-            // Morph thinking indicator into response
+            // Collapse live thinking panel if present
+            if(thinkPanel){
+              thinkPanel.classList.add('ltp-done');
+              const dotsEl=thinkPanel.querySelector('.ltp-dots');
+              if(dotsEl)dotsEl.remove();
+              // Make it collapsible
+              const hdr=thinkPanel.querySelector('.ltp-header');
+              const body=thinkPanel.querySelector('.ltp-body');
+              if(hdr&&body){
+                hdr.style.cursor='pointer';
+                body.style.maxHeight='0';body.style.padding='0';body.style.overflow='hidden';
+                body.style.transition='max-height .3s var(--ease-smooth), padding .3s var(--ease-smooth)';
+                hdr.onclick=()=>{
+                  const collapsed=body.style.maxHeight==='0px'||body.style.maxHeight==='0';
+                  body.style.maxHeight=collapsed?'200px':'0';
+                  body.style.padding=collapsed?'12px 14px':'0';
+                };
+              }
+            }
+            // Remove thinking indicator if still present
             const thinkIndicator=contentEl.querySelector('.think-active');
             if(thinkIndicator){
               thinkIndicator.style.transition='all .35s var(--ease-smooth)';
@@ -1694,20 +1941,21 @@ async function sendMessage(){
               thinkIndicator.style.padding='0';
               thinkIndicator.style.margin='0';
             }
-            // Fade out stream preview gracefully
-            const streamPreview=contentEl.querySelector('.stream-preview');
-            if(streamPreview){
-              contentEl.classList.add('morphing-out');
-            }
-            await new Promise(r=>setTimeout(r,350));
+            stopThinkingPhrases();
+            await new Promise(r=>setTimeout(r,250));
             let finalHTML='';
             let displayReply=data.reply||'';
-            if(displayReply.includes('<<<THINKING>>>')&&displayReply.includes('<<<END_THINKING>>>')){
+            // If we already showed thinking live, use it for the think block
+            if(thinkText){
+              finalHTML+=renderThinkBlock(thinkText);
+            } else if(displayReply.includes('<<<THINKING>>>')&&displayReply.includes('<<<END_THINKING>>>')){
               const parts=displayReply.split('<<<END_THINKING>>>');
               const thinkPart=parts[0].replace('<<<THINKING>>>','').trim();
               displayReply=parts.slice(1).join('<<<END_THINKING>>>').trim();
               finalHTML+=renderThinkBlock(thinkPart);
             }
+            // Strip thinking tags from reply if still present
+            displayReply=displayReply.replace(/<<<THINKING>>>[\s\S]*?<<<END_THINKING>>>/g,'').trim();
             let choices=[];
             const choiceMatch=displayReply.match(/<<<CHOICES>>>\n([\s\S]*?)<<<END_CHOICES>>>/);
             if(choiceMatch){
@@ -1733,30 +1981,28 @@ async function sendMessage(){
             if(data.research_trigger){
               const rq=data.research_trigger;
               setTimeout(()=>{
-                document.getElementById('researchQuery').value=rq;
-                openResearchModal();
-                generateResearchPlan();
+                if(!researchEnabled) toggleResearch();
+                startInlineResearchPlan(rq,deepResearchDepth);
               },400);
             }
 
             if(canRender()){
-              contentEl.classList.remove('morphing-out');
-              contentEl.style.opacity='0';
-              contentEl.style.filter='blur(6px)';
-              contentEl.style.transform='translateY(8px)';
+              contentEl.style.opacity='1';contentEl.style.filter='';contentEl.style.transform='';
               contentEl.innerHTML=finalHTML;
-              // Animate content in with blur-dissolve
+              // Animate content in smoothly
+              contentEl.style.opacity='0';
+              contentEl.style.filter='blur(4px)';
+              contentEl.style.transform='translateY(6px)';
               requestAnimationFrame(()=>{
-                contentEl.style.transition='opacity .45s var(--ease-smooth), filter .45s var(--ease-smooth), transform .45s var(--ease-smooth)';
+                contentEl.style.transition='opacity .4s var(--ease-smooth), filter .4s var(--ease-smooth), transform .4s var(--ease-smooth)';
                 contentEl.style.opacity='1';
                 contentEl.style.filter='blur(0)';
                 contentEl.style.transform='translateY(0)';
-                // Clean up inline styles after animation
                 setTimeout(()=>{
                   contentEl.style.transition='';
                   contentEl.style.filter='';
                   contentEl.style.transform='';
-                },500);
+                },450);
               });
               if(data.title&&data.title!=='New Chat')document.getElementById('topTitle').textContent=data.title;
               try{Promise.resolve(mermaid.run()).then(()=>enhanceMermaidDiagrams())}catch{}
