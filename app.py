@@ -70,8 +70,19 @@ def _init_firebase():
     try:
         firebase_admin.initialize_app(cred, opts)
         db = firestore.client()
+        # Verify Firestore is actually reachable (not just authenticated)
+        try:
+            db.collection("_health").document("ping").set({"ts": datetime.datetime.now().isoformat()})
+            print("  [✓] Firebase connected & Firestore verified — data will persist across deploys.")
+        except Exception as fs_err:
+            print(f"  [!] Firebase authenticated but Firestore unreachable: {fs_err}")
+            print("      Make sure you've created a Firestore database in Firebase Console.")
+            print("      Go to: https://console.firebase.google.com → Your project → Firestore Database → Create database")
+            print("      Falling back to local file storage.")
+            db = None
+            FIREBASE_ENABLED = False
+            return
         FIREBASE_ENABLED = True
-        print("  [✓] Firebase connected — data will persist across deploys.")
     except Exception as e:
         print(f"  [!] Firebase init failed ({e}) - using local file storage.")
 
@@ -191,6 +202,12 @@ app.secret_key = _get_secret()
 app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(days=30)
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_NAME"] = "nexus_session"
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Catch-all so Firestore / unexpected errors return JSON, not a 500 HTML page."""
+    print(f"  [!] Unhandled error: {e}")
+    return jsonify({"error": f"Server error: {str(e)[:200]}"}), 500
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
