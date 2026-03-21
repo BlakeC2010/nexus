@@ -1166,34 +1166,29 @@ def extract_image_searches(text):
     return cleaned, queries
 
 def search_images(query, num=8):
-    """Search images with DuckDuckGo, with retry + Bing scraping fallback."""
-    import time as _time
-
-    # --- Attempt 1: DuckDuckGo via library (try up to 2 times) ---
-    for attempt in range(2):
+    """Search images with DuckDuckGo (single fast attempt) + Bing fallback."""
+    # --- Attempt 1: DuckDuckGo via library (single attempt, fast timeout) ---
+    try:
         try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
-            with DDGS() as ddgs:
-                raw = list(ddgs.images(query, max_results=num, safesearch="moderate"))
-            if raw:
-                results = []
-                for item in raw:
-                    results.append({
-                        "url": item.get("image", ""),
-                        "title": item.get("title", ""),
-                        "thumbnail": item.get("thumbnail", item.get("image", "")),
-                        "context_url": item.get("url", ""),
-                        "width": item.get("width", 0),
-                        "height": item.get("height", 0),
-                    })
-                return results
-        except Exception as e:
-            print(f"  [image-search] DDG attempt {attempt+1} error: {e}")
-            if attempt == 0:
-                _time.sleep(1.5)
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        with DDGS(timeout=8) as ddgs:
+            raw = list(ddgs.images(query, max_results=num, safesearch="moderate"))
+        if raw:
+            results = []
+            for item in raw:
+                results.append({
+                    "url": item.get("image", ""),
+                    "title": item.get("title", ""),
+                    "thumbnail": item.get("thumbnail", item.get("image", "")),
+                    "context_url": item.get("url", ""),
+                    "width": item.get("width", 0),
+                    "height": item.get("height", 0),
+                })
+            return results
+    except Exception as e:
+        print(f"  [image-search] DDG error: {e}")
 
     # --- Attempt 2: Bing image scraping fallback ---
     try:
@@ -1204,7 +1199,7 @@ def search_images(query, num=8):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         }
         url = f"https://www.bing.com/images/search?q={_req.utils.quote(query)}&first=1&count={num}"
-        resp = _req.get(url, headers=headers, timeout=8)
+        resp = _req.get(url, headers=headers, timeout=5)
         soup = _BS(resp.text, "html.parser")
         results = []
         for a_tag in soup.select("a.iusc"):
@@ -1450,10 +1445,6 @@ def prepare_chat_turn(chat, payload):
     # --- Per-chat custom instructions ---
     if chat.get("custom_instructions"):
         sysprompt += f"\n\n[CHAT-SPECIFIC INSTRUCTIONS]\n{chat['custom_instructions']}"
-
-    # --- Always enable code execution (AI can use it without user activating) ---
-    if "code" not in active_tools:
-        active_tools = list(active_tools) + ["code"]
 
     # --- Active tool instructions (injected silently into system prompt) ---
     tool_instructions = _build_tool_instructions(active_tools)
@@ -2812,16 +2803,23 @@ def chat_message_stream(chat_id):
                 if not has_prior_clarification:
                     # AI skipped clarifying questions — suppress the trigger
                     research_query = None
-            # Extract image search queries and fetch results
+            # Extract image search queries and fetch results (parallel)
             raw_text, image_queries = extract_image_searches(raw_text)
             image_results = []
             failed_image_queries = []
-            for iq in image_queries:
-                imgs = search_images(iq)
-                if imgs:
-                    image_results.append({"query": iq, "images": imgs})
-                else:
-                    failed_image_queries.append(iq)
+            if image_queries:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                def _img_search(iq):
+                    imgs = search_images(iq)
+                    return iq, imgs
+                with ThreadPoolExecutor(max_workers=min(len(image_queries), 4)) as pool:
+                    futs = {pool.submit(_img_search, iq): iq for iq in image_queries}
+                    for fut in as_completed(futs):
+                        iq, imgs = fut.result()
+                        if imgs:
+                            image_results.append({"query": iq, "images": imgs})
+                        else:
+                            failed_image_queries.append(iq)
             clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
             done_payload = {
                 "type": "done",

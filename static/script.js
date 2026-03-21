@@ -1865,39 +1865,68 @@ async function runDeepResearch(query,contentEl,area,planText){
   let wasCancelled=false;
   let researchCompleted=false;
 
+  // Build initial progress card HTML once
+  const stepsInitHtml=stepNames.map((name,i)=>{
+    return `<div class="research-step" data-rs="${i}"><div class="research-step-dot">${i+1}</div><div class="research-step-label">${name}</div></div>`;
+  }).join('');
+  contentEl.innerHTML=`
+    <div class="research-badge">🔬 Deep Research · ${esc(depth)}</div>
+    <div class="research-progress" id="_rp">
+      <div class="research-progress-header">
+        <span class="research-progress-title" id="_rpTitle">Plan...</span>
+        <span class="research-progress-pct" id="_rpPct">0%</span>
+      </div>
+      <div class="research-bar-track">
+        <div class="research-bar-fill" id="_rpBar" style="width:0%"></div>
+      </div>
+      <div class="research-steps" id="_rpSteps">
+        <div class="research-steps-line"><div class="research-steps-line-fill" id="_rpLine" style="width:0%"></div></div>
+        ${stepsInitHtml}
+      </div>
+      <div class="research-activity">
+        <span class="research-activity-dot"></span>
+        <span id="_rpMsg">Preparing research pipeline...</span>
+      </div>
+      <div class="research-log" id="_rpLog"><div class="rline">⏳ Starting research pipeline...</div></div>
+    </div>`;
+  area.scrollTop=area.scrollHeight;
+  let _logLines=1;
+
+  // Update existing DOM nodes in-place — no layout thrash
   const renderProgressBar=()=>{
-    const stepsHtml=stepNames.map((name,i)=>{
-      let cls='research-step';
-      if(i<currentStep) cls+=' done';
-      else if(i===currentStep) cls+=' active';
-      const icon=i<currentStep?'✓':(i===currentStep?stepIcons[i]:(i+1));
-      return `<div class="${cls}"><div class="research-step-dot">${icon}</div><div class="research-step-label">${name}</div></div>`;
-    }).join('');
+    const titleEl=document.getElementById('_rpTitle');
+    const pctEl=document.getElementById('_rpPct');
+    const barEl=document.getElementById('_rpBar');
+    const lineEl=document.getElementById('_rpLine');
+    const msgEl=document.getElementById('_rpMsg');
+    const stepsEl=document.getElementById('_rpSteps');
+    const logEl=document.getElementById('_rpLog');
+    if(!titleEl)return;
+    titleEl.textContent=currentStep<stepNames.length?stepNames[currentStep]+'...':'Complete...';
+    pctEl.textContent=Math.round(currentPct)+'%';
+    barEl.style.width=currentPct+'%';
     const lineProgress=currentStep>0?Math.min(((currentStep)/(stepNames.length-1))*100,100):0;
-
-    contentEl.innerHTML=`
-      <div class="research-badge">🔬 Deep Research · ${esc(depth)}</div>
-      <div class="research-progress">
-        <div class="research-progress-header">
-          <span class="research-progress-title">${currentStep<stepNames.length?stepNames[currentStep]:'Complete'}...</span>
-          <span class="research-progress-pct">${Math.round(currentPct)}%</span>
-        </div>
-        <div class="research-bar-track">
-          <div class="research-bar-fill" style="width:${currentPct}%"></div>
-        </div>
-        <div class="research-steps">
-          <div class="research-steps-line"><div class="research-steps-line-fill" style="width:${lineProgress}%"></div></div>
-          ${stepsHtml}
-        </div>
-        <div class="research-activity">
-          <span class="research-activity-dot"></span>
-          <span>${esc(lastMessage)}</span>
-        </div>
-      </div>`;
-    area.scrollTop=area.scrollHeight;
+    lineEl.style.width=lineProgress+'%';
+    msgEl.textContent=lastMessage;
+    // Append to activity log
+    if(logEl&&lastMessage){
+      const line=document.createElement('div');
+      line.className='rline';
+      line.textContent=`[${Math.round(currentPct)}%] ${lastMessage}`;
+      logEl.appendChild(line);
+      logEl.scrollTop=logEl.scrollHeight;
+      _logLines++;
+    }
+    // Update step dots
+    if(stepsEl){
+      const dots=stepsEl.querySelectorAll('.research-step');
+      dots.forEach((dot,i)=>{
+        dot.className='research-step'+(i<currentStep?' done':(i===currentStep?' active':''));
+        const dotInner=dot.querySelector('.research-step-dot');
+        if(dotInner)dotInner.textContent=i<currentStep?'✓':(i===currentStep?stepIcons[i]:String(i+1));
+      });
+    }
   };
-
-  renderProgressBar();
 
   const bodyObj={query,depth};
   if(planText)bodyObj.plan=planText;
@@ -1915,7 +1944,7 @@ async function runDeepResearch(query,contentEl,area,planText){
   const decoder=new TextDecoder();
   let buffer='';
   let lastEventTime=Date.now();
-  const STALL_TIMEOUT=45000; // 45 seconds with no data = stalled
+  const STALL_TIMEOUT=120000; // 120 seconds — research AI calls can be long
 
   while(true){
     // Race between reading and a stall timeout
@@ -2426,6 +2455,7 @@ async function openArtifact(id){
 
 async function sendMessage(opts){
   const _silent=opts&&opts.silent;
+  const _noThinking=opts&&opts.noThinking;
   const input=document.getElementById('msgInput');const text=input.value.trim();
   if(!text&&!pendingFiles.length)return;
   // Reset continue counter when user sends a new (non-continue) message
@@ -2509,7 +2539,7 @@ async function sendMessage(opts){
     }
 
     const response=await apiFetch(`/api/chats/${targetChatId}/stream`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:messageToSend,files,thinking:thinkingEnabled,active_tools:toolsForMsg}),signal:controller.signal});
+      body:JSON.stringify({message:messageToSend,files,thinking:_noThinking?false:thinkingEnabled,active_tools:toolsForMsg}),signal:controller.signal});
 
     const ct=response.headers.get('content-type')||'';
     if(ct.includes('application/json')){
@@ -2715,44 +2745,26 @@ async function sendMessage(opts){
 
             // ── AI-triggered deep research ──
             if(data.research_trigger&&!choiceBlocks.length){
-              // AI emitted <<<DEEP_RESEARCH: query>>> — launch the real pipeline
               const rq=data.research_trigger;
               if(canRender()){
                 contentEl.innerHTML=finalHTML;
                 if(data.title&&data.title!=='New Chat')document.getElementById('topTitle').textContent=data.title;
               }
               setChatRunning(targetChatId,false);
-              // Launch the deep research pipeline inline with auto-retry on stall
               setChatRunning(targetChatId,true,{type:'research'});
-              const _maxResearchRetries=3;
-              let _researchAttempt=0;
-              let researchSuccess=false;
-              while(_researchAttempt<_maxResearchRetries&&!researchSuccess){
-                _researchAttempt++;
-                try{
-                  await runDeepResearch(rq,contentEl,document.getElementById('chatArea'));
-                  researchSuccess=true;
-                }catch(e){
-                  if(e.message==='__RESEARCH_STALLED__'&&_researchAttempt<_maxResearchRetries){
-                    setStatus(`Research stalled — retrying (${_researchAttempt}/${_maxResearchRetries})...`);
-                    continue;
-                  }
-                  const msg=e.message==='__RESEARCH_STALLED__'?'Research stopped unexpectedly after multiple retries.':e.message;
-                  contentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(msg||'Research failed.')}</div>`;
-                  setStatus('Research failed.');
-                  break;
-                }
-              }
-              if(researchSuccess){
+              try{
+                await runDeepResearch(rq,contentEl,document.getElementById('chatArea'));
                 await refreshChats();
                 // After research completes, silently auto-continue so the AI can add commentary
                 setChatRunning(targetChatId,false);
                 try{
                   const inp=document.getElementById('msgInput');
                   inp.value='The deep research report above is now complete. Provide a brief executive summary highlighting the 3-5 most important findings, key takeaways, and any actionable recommendations. Be concise.';
-                  sendMessage({silent:true});
+                  sendMessage({silent:true,noThinking:true});
                 }catch(_){}
-              }else{
+              }catch(e){
+                contentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(e.message||'Research failed.')}</div>`;
+                setStatus('Research failed.');
                 setChatRunning(targetChatId,false);
               }
               return;
@@ -2790,7 +2802,7 @@ async function sendMessage(opts){
               setTimeout(()=>{
                 const inp=document.getElementById('msgInput');
                 inp.value='Continue where you left off. Pick up exactly where you stopped.';
-                sendMessage({silent:true});
+                sendMessage({silent:true,noThinking:true});
               },600);
             }else{
               _continueCount=0;
