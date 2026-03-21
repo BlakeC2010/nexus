@@ -637,6 +637,17 @@ body.light .chat-area::before{
 .msg .fo{display:flex;align-items:center;gap:5px;padding:2px 0;color:var(--green)}
 .fo-link{color:var(--green);text-decoration:none;cursor:pointer;transition:opacity .15s}.fo-link:hover{opacity:.7;text-decoration:underline}
 .msg .mops{margin-top:6px;font-size:10px;color:var(--purple)}
+/* Code execution results */
+.code-run-block{margin-top:12px;border-radius:var(--r-md);border:1px solid var(--border);overflow:hidden;font-size:12px}
+.code-run-block.code-run-success{border-color:var(--green)}
+.code-run-block.code-run-error{border-color:var(--red)}
+.crb-header{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:var(--bg-deep);border-bottom:1px solid var(--border);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.crb-lang{color:var(--text-muted)}
+.code-run-success .crb-status{color:var(--green)}
+.code-run-error .crb-status{color:var(--red)}
+.crb-code{margin:0;padding:10px 12px;background:var(--bg-surface);font-family:var(--font-mono,'Consolas',monospace);font-size:11.5px;line-height:1.6;overflow-x:auto;max-height:200px;overflow-y:auto;border-bottom:1px solid var(--border);color:var(--text-secondary)}
+.crb-output-label{padding:4px 12px 2px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);background:var(--bg-deep)}
+.crb-output{margin:0;padding:10px 12px;background:var(--bg-deep);font-family:var(--font-mono,'Consolas',monospace);font-size:11.5px;line-height:1.6;overflow-x:auto;max-height:300px;overflow-y:auto;color:var(--text-primary);white-space:pre-wrap}
 .msg .mermaid-container{margin-top:16px;background:var(--bg-deep);border-radius:var(--r-lg);padding:20px;overflow-x:auto;border:1px solid var(--border);box-shadow:0 2px 12px rgba(0,0,0,.15)}
 /* Stream preview — live text + cursor */
 .msg .stream-preview{

@@ -1079,6 +1079,41 @@ def execute_file_operations(text):
 def extract_memory_ops(text):
     return [m.group(1).strip() for m in re.finditer(r'<<<MEMORY_ADD:\s*(.+?)>>>', text)]
 
+# ─── Code Execution ──────────────────────────────────────────────────────────
+
+def execute_code_blocks(text):
+    """Extract <<<CODE_EXECUTE: lang>>>...<<<END_CODE>>> blocks, execute them, and return results."""
+    import subprocess, tempfile, os
+    pattern = r'<<<CODE_EXECUTE:\s*(\w+)>>>\n(.*?)<<<END_CODE>>>'
+    results = []
+    for m in re.finditer(pattern, text, re.DOTALL):
+        lang = m.group(1).strip().lower()
+        code = m.group(2).strip()
+        if lang not in ("python", "py"):
+            results.append({"language": lang, "code": code, "output": f"Execution not supported for '{lang}'.", "success": False})
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
+            result = subprocess.run(
+                ["python", tmp_path],
+                capture_output=True, text=True, timeout=15,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            os.unlink(tmp_path)
+            output = result.stdout
+            if result.stderr:
+                output += ("\n" if output else "") + result.stderr
+            results.append({"language": lang, "code": code, "output": output.strip() or "(no output)", "success": result.returncode == 0})
+        except subprocess.TimeoutExpired:
+            try: os.unlink(tmp_path)
+            except Exception: pass
+            results.append({"language": lang, "code": code, "output": "Execution timed out (15s limit).", "success": False})
+        except Exception as e:
+            results.append({"language": lang, "code": code, "output": f"Error: {e}", "success": False})
+    return results
+
 def extract_research_trigger(text):
     """Extract <<<DEEP_RESEARCH: query>>> from AI response and return (cleaned_text, query_or_None)."""
     m = re.search(r'<<<DEEP_RESEARCH:\s*(.+?)>>>', text)
@@ -1118,6 +1153,7 @@ def search_images(query, num=8):
 def clean_response(text):
     text = re.sub(r'<<<FILE_CREATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<FILE_UPDATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<<<CODE_EXECUTE:\s*\w+>>>.*?<<<END_CODE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<MEMORY_ADD:\s*.+?>>>', '', text)
     text = re.sub(r'<<<DEEP_RESEARCH:\s*.+?>>>', '', text)
     text = re.sub(r'<<<IMAGE_SEARCH:\s*.+?>>>', '', text)
@@ -1223,6 +1259,20 @@ def _build_tool_instructions(active_tools):
         "summarize": (
             "[TOOL ACTIVE: SUMMARIZE]\n"
             "The user has activated the Summarize tool. Provide a concise, well-structured summary of whatever they ask about."
+        ),
+        "code": (
+            "[TOOL ACTIVE: CODE EXECUTION]\n"
+            "The user has activated the Code Execution tool. You can now run Python code and show the output. "
+            "When computation, data processing, math, generating files, or any task that benefits from running actual code is involved, "
+            "write executable Python code inside the special execution block:\n"
+            "<<<CODE_EXECUTE: python>>>\n"
+            "print('Hello world')\n"
+            "<<<END_CODE>>>\n"
+            "The code will be executed server-side and the output shown to the user. "
+            "Always use print() to produce output the user can see. "
+            "You may use multiple CODE_EXECUTE blocks in a single response if needed. "
+            "Available standard library modules: math, json, csv, datetime, random, collections, itertools, re, statistics, os, sys, etc. "
+            "Keep code focused and concise. The execution has a 15-second timeout."
         ),
     }
     for tool in active_tools:
@@ -1344,6 +1394,7 @@ def prepare_chat_turn(chat, payload):
 
 def finalize_chat_response(chat, ctx, raw_response):
     executed = execute_file_operations(raw_response)
+    code_results = execute_code_blocks(raw_response)
     new_facts = extract_memory_ops(raw_response)
     if new_facts:
         for fact in new_facts:
@@ -1364,13 +1415,16 @@ def finalize_chat_response(chat, ctx, raw_response):
         )
 
     chat["messages"].append(ctx["user_msg"])
-    chat["messages"].append({
+    msg_obj = {
         "role": "model",
         "text": clean,
         "timestamp": datetime.datetime.now().isoformat(),
         "files_modified": executed,
         "memory_added": new_facts or None,
-    })
+    }
+    if code_results:
+        msg_obj["code_results"] = code_results
+    chat["messages"].append(msg_obj)
     # Track generated files on the chat object for per-chat file listing
     if executed:
         chat_files = chat.get("generated_files") or []
@@ -1385,7 +1439,7 @@ def finalize_chat_response(chat, ctx, raw_response):
     # Track token usage for guests (estimate: 1 token ≈ 4 chars)
     if session.get("guest") and not session.get("user_id"):
         _add_guest_tokens((len(ctx.get("user_text", "")) + len(clean)) // 4)
-    return clean, executed, new_facts
+    return clean, executed, new_facts, code_results
 
 # ─── Context Helpers ────────────────────────────────────────────────────────
 
@@ -2527,8 +2581,10 @@ def chat_message(chat_id):
         return jsonify({"error": f"API error: {err}", "files": []})
 
     resp, research_query = extract_research_trigger(resp)
-    clean, executed, new_facts = finalize_chat_response(chat, ctx, resp)
+    clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, resp)
     result = {"reply": clean, "files": executed, "memory_added": new_facts}
+    if code_results:
+        result["code_results"] = code_results
     if research_query:
         result["research_trigger"] = research_query
     return jsonify(result)
@@ -2620,7 +2676,7 @@ def chat_message_stream(chat_id):
                 imgs = search_images(iq)
                 if imgs:
                     image_results.append({"query": iq, "images": imgs})
-            clean, executed, new_facts = finalize_chat_response(chat, ctx, raw_text)
+            clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
             done_payload = {
                 "type": "done",
                 "reply": clean,
@@ -2628,6 +2684,8 @@ def chat_message_stream(chat_id):
                 "memory_added": new_facts,
                 "title": chat.get("title", "New Chat"),
             }
+            if code_results:
+                done_payload["code_results"] = code_results
             if research_query:
                 done_payload["research_trigger"] = research_query
             if image_results:

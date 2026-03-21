@@ -1733,7 +1733,7 @@ async function pasteFromClipboard(){
 let activeTools=new Set();
 
 function activateTool(tool){
-  if(tool==='code'||tool==='imagegen'){showToast('Coming soon!','info');return;}
+  if(tool==='imagegen'){showToast('Coming soon!','info');return;}
   if(activeTools.has(tool)){
     activeTools.delete(tool);
     showToast(`${tool.charAt(0).toUpperCase()+tool.slice(1)} tool deactivated`,'info');
@@ -1757,7 +1757,7 @@ function renderToolBadges(){
   }
   if(!activeTools.size){wrap.style.display='none';return;}
   wrap.style.display='flex';
-  const names={canvas:'Canvas',search:'Web Search',mindmap:'Mind Map',research:'Deep Research',summarize:'Summarize'};
+  const names={canvas:'Canvas',search:'Web Search',mindmap:'Mind Map',research:'Deep Research',summarize:'Summarize',code:'Code Execution'};
   wrap.innerHTML=[...activeTools].map(t=>`<span class="tool-badge" onclick="activateTool('${t}')">${names[t]||t} <span class="tb-x">×</span></span>`).join('');
 }
 
@@ -2627,6 +2627,12 @@ async function sendMessage(){
               finalHTML+='</div>';
             }
             finalHTML+=renderArtifactCards(artifactIds,'ready');
+            if(data.code_results?.length){
+              for(const cr of data.code_results){
+                const statusCls=cr.success?'code-run-success':'code-run-error';
+                finalHTML+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre></div>`;
+              }
+            }
             if(data.memory_added?.length)finalHTML+=`<div class="mops">Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
 
             // ── Image search results carousel ──
@@ -2748,6 +2754,12 @@ function addMsg(role,text,files,extra={}){
   if(role==='kairo')artifactIds=registerArtifactsFromReply(displayText,files||[]);
   if(files?.length){html+='<div class="fops">';for(const f of files)html+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${f.action}: ${esc(f.path)}</a></div>`;html+='</div>'}
   if(artifactIds.length)html+=renderArtifactCards(artifactIds,'ready');
+  if(extra.code_results?.length){
+    for(const cr of extra.code_results){
+      const statusCls=cr.success?'code-run-success':'code-run-error';
+      html+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre></div>`;
+    }
+  }
   if(extra.memory_added?.length)html+=`<div class="mops">Remembered: ${extra.memory_added.map(esc).join('; ')}</div>`;
   if(role==='user'&&text)html+=`<div class="msg-actions"><button class="msg-action-btn" onclick="editMsg(this)">✎ Edit</button></div>`;
   else if(role==='kairo')html+=`<div class="msg-actions"><button class="msg-action-btn" onclick="retryMsg(this)">↺ Retry</button></div>`;
