@@ -383,6 +383,7 @@ async function showApp(){
   updateComposerBusyUI();
   document.getElementById('msgInput').focus();
   checkForUpdates();
+  ensureOnboarding();
 }
 
 // ─── Changelog / Update Notification ──────────────
@@ -1126,7 +1127,7 @@ async function submitOnboarding(){
     hideSetupReminder();
     if(curUser){curUser.name=(d.user?.name||preferred_name);updateUserUI();}
     document.getElementById('onboardingModal').classList.remove('open');
-    showToast('Setup complete. gyro is personalized for you.','success');
+    showToast('All set! gyro is personalized for you.','success');
   }catch(e){
     errEl.textContent='Failed to save setup.';
     btn.disabled=false;
