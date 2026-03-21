@@ -2163,25 +2163,52 @@ function renderChoiceBlock(choices,question){
 
 function pickChoice(btn,text){
   const block=btn.closest('.cq-block');
-  // Mark selected
   block.querySelectorAll('.cq-opt').forEach(b=>b.classList.remove('cq-selected'));
   btn.classList.add('cq-selected');
-  // Disable all options
-  block.querySelectorAll('.cq-opt').forEach(b=>{b.disabled=true;b.style.pointerEvents='none';});
-  const customRow=block.querySelector('.cq-custom');
-  if(customRow)customRow.style.display='none';
-  // Send
-  sendQ(text);
+  block.dataset.answer=text;
+  _afterChoicePick(block);
 }
 
 function pickCustomChoice(input){
   const text=(input.value||'').trim();
   if(!text)return;
   const block=input.closest('.cq-block');
-  block.querySelectorAll('.cq-opt').forEach(b=>{b.disabled=true;b.style.pointerEvents='none';});
-  const customRow=block.querySelector('.cq-custom');
-  if(customRow)customRow.style.display='none';
-  sendQ(text);
+  block.querySelectorAll('.cq-opt').forEach(b=>b.classList.remove('cq-selected'));
+  block.dataset.answer=text;
+  _afterChoicePick(block);
+}
+
+function _afterChoicePick(block){
+  const group=block.closest('.cq-group');
+  const blocks=group?group.querySelectorAll('.cq-block'):[block];
+  if(blocks.length<=1){
+    // Single question — send immediately (old behavior)
+    block.querySelectorAll('.cq-opt').forEach(b=>{b.disabled=true;b.style.pointerEvents='none';});
+    const cr=block.querySelector('.cq-custom');if(cr)cr.style.display='none';
+    sendQ(block.dataset.answer);
+    return;
+  }
+  // Multiple questions — enable submit button when all answered
+  const allAnswered=[...blocks].every(b=>b.dataset.answer);
+  const submitBtn=group.querySelector('.cq-submit-all');
+  if(submitBtn)submitBtn.disabled=!allAnswered;
+}
+
+function submitAllChoices(btn){
+  const group=btn.closest('.cq-group');
+  const blocks=group.querySelectorAll('.cq-block');
+  const parts=[...blocks].map(b=>{
+    const q=b.querySelector('.cq-question');
+    const qText=q?q.textContent.trim():'';
+    const a=b.dataset.answer||'';
+    return qText?qText+' '+a:a;
+  });
+  blocks.forEach(b=>{
+    b.querySelectorAll('.cq-opt').forEach(o=>{o.disabled=true;o.style.pointerEvents='none';});
+    const cr=b.querySelector('.cq-custom');if(cr)cr.style.display='none';
+  });
+  btn.disabled=true;btn.textContent='Submitted ✓';
+  sendQ(parts.join('\n'));
 }
 
 function stripMetaBlocks(text){
@@ -2603,8 +2630,13 @@ async function sendMessage(){
               displayReply=displayReply.replace(/<<<CONTINUE>>>/g,'').trim();
             }
             finalHTML+=fmt(displayReply);
-            for(const cb of choiceBlocks){
-              if(cb.choices.length)finalHTML+=renderChoiceBlock(cb.choices,cb.question);
+            if(choiceBlocks.length){
+              finalHTML+='<div class="cq-group">';
+              for(const cb of choiceBlocks){
+                if(cb.choices.length)finalHTML+=renderChoiceBlock(cb.choices,cb.question);
+              }
+              if(choiceBlocks.length>1)finalHTML+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
+              finalHTML+='</div>';
             }
             const artifactIds=registerArtifactsFromReply(displayReply,data.files||[]);
             if(data.files?.length){
@@ -2727,9 +2759,12 @@ function addMsg(role,text,files,extra={}){
   displayText=displayText.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
   html+=fmt(displayText);
   if(cBlocks.length&&role==='kairo'){
+    html+='<div class="cq-group">';
     for(const cb of cBlocks){
       if(cb.choices.length)html+=renderChoiceBlock(cb.choices,cb.question);
     }
+    if(cBlocks.length>1)html+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
+    html+='</div>';
   }
   let artifactIds=[];
   if(role==='kairo')artifactIds=registerArtifactsFromReply(displayText,files||[]);
