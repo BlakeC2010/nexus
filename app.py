@@ -940,7 +940,7 @@ Topic C
 You can also use choices WITHOUT a question tag — just <<<CHOICES>>> directly — for simple option lists after your text.
 The user can ALWAYS type their own answer instead of picking an option, so choices are suggestions not constraints.
 
-13. Tools — the user can activate tools from the toolbar. When a tool is active, you will see a [TOOL ACTIVE: ...] section in your instructions with specific guidance. Follow those instructions naturally within your response. The user's message itself will NOT contain any tool prefixes — the tool context is provided to you separately.
+13. Tools — the user can activate tools from the toolbar for emphasis, but you can and SHOULD use ANY of your capabilities at any time without the user needing to activate them. Image search, mind maps, code execution, file creation — use them whenever they'd improve your response. The toolbar is just a hint, not a gate.
 
 13b. Canvas editing — when a user's message contains [CANVAS CONTEXT], they are working in the side canvas editor and asking you to help edit it. If <<<SELECTED>>>...<<<END_SELECTED>>> is present, the user has highlighted a specific portion and wants changes ONLY to that part. Return the FULL updated document in a single code block with the proper language tag. ALWAYS include the filename with extension on the line before the code block. Only modify what the user asked for.
 
@@ -953,7 +953,13 @@ IMPORTANT: Always output the todolist block DIRECTLY in your response text for t
 ALSO: Always save the todo list to a file using <<<FILE_CREATE: notes/todos.md>>> (or an appropriate filename) so it persists across chats and shows up in the workspace. When updating an existing todo list, use <<<FILE_UPDATE: notes/todos.md>>> to keep it current. The file version should be a clean markdown checklist (e.g. "- [ ] Task" / "- [x] Done task"), NOT the JSON format.
 When the user adds items to an existing todo list, output the COMPLETE updated todolist block with ALL items (old + new), not just the new ones. This replaces the previous list in the chat.
 
-15. DEEP RESEARCH — The user can activate a deep research tool from the toolbar. When active, you give an exceptionally thorough, multi-angle, well-structured response — like a mini research report. You do NOT need to output any <<<DEEP_RESEARCH>>> tags. Just respond with maximum depth and quality directly.
+15. DEEP RESEARCH — When the [TOOL ACTIVE: DEEP RESEARCH] instruction is present, the user wants a thorough, in-depth response. Before diving in, YOU (the AI) should ask 2-4 quick clarifying questions using the interactive choices system to tailor the research. For example:
+- What specific aspects to focus on
+- Whether to include mind maps / visualizations
+- Whether to include images
+- What export format they want (just text, PDF via code execution, saved to file, etc.)
+- How deep to go (overview vs. comprehensive deep-dive)
+Use <<<CHOICES>>> blocks for these questions so the user can click to answer. Once you have their preferences, THEN produce the full research response using all relevant tools (images, mind maps, code execution for PDFs, file saves, etc.). Make it feel like a thorough research report.
 
 File operations format:
 <<<FILE_CREATE: path/to/file.md>>>
@@ -1299,15 +1305,17 @@ def _build_tool_instructions(active_tools):
         ),
         "research": (
             "[TOOL ACTIVE: DEEP RESEARCH]\n"
-            "The user has activated the Deep Research tool. Respond with an exceptionally thorough, comprehensive, "
-            "and well-structured response. Go much deeper than normal — cover multiple angles, provide detailed analysis, "
-            "include historical context, current state, and future implications where relevant. "
-            "Use headings, sub-sections, and bullet points for organization. "
-            "Cite specific facts, dates, names, and statistics. "
-            "Include relevant images using <<<IMAGE_SEARCH: query>>> tags. "
-            "Generate mind maps using ```mermaid blocks when it helps visualize relationships. "
-            "This should feel like a mini research report, not a casual answer. "
-            "Do NOT output <<<DEEP_RESEARCH>>> tags. Just give the thorough response directly."
+            "The user wants a deep, thorough research response on their topic. "
+            "FIRST: Ask 2-4 quick clarifying questions using <<<CHOICES>>> blocks to tailor the output. For example:\n"
+            "- What specific aspects or angles to focus on\n"
+            "- Whether to include mind maps and visualizations (```mermaid)\n"
+            "- Whether to include images (<<<IMAGE_SEARCH>>>)\n"
+            "- Export format: just in-chat text, PDF via code execution, or saved as a file\n"
+            "- Depth level: quick overview vs. comprehensive deep-dive\n"
+            "Keep the questions conversational and relevant to their specific topic. "
+            "Once the user answers, produce the full research using ALL relevant tools "
+            "(images, mind maps, code execution for PDF generation, FILE_CREATE for saving). "
+            "Make it comprehensive, well-structured with headings and sections, and cite specific facts."
         ),
     }
     for tool in active_tools:
