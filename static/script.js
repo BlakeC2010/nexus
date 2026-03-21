@@ -1863,6 +1863,7 @@ async function runDeepResearch(query,contentEl,area,planText){
   const stepIcons=['1','2','3','4','5','6','7','8','9','10'];
   let currentPct=0, currentStep=0, lastMessage='Preparing research pipeline...';
   let wasCancelled=false;
+  let researchCompleted=false;
 
   const renderProgressBar=()=>{
     const stepsHtml=stepNames.map((name,i)=>{
@@ -1978,6 +1979,7 @@ async function runDeepResearch(query,contentEl,area,planText){
           <button class="research-regen-btn" onclick="regenerateResearch('${esc(query).replace(/'/g,"\\'")}')">🔄 Regenerate</button>
         `;
         setStatus('Research complete. You can download the report.');
+        researchCompleted=true;
       }else if(evt.type==='error'){
         throw new Error(evt.error||'Research failed.');
       }
@@ -1985,6 +1987,10 @@ async function runDeepResearch(query,contentEl,area,planText){
   }
   _currentResearchJobId=null;
   _currentResearchReader=null;
+  // If stream ended but we never got a 'done' event, it stalled
+  if(!researchCompleted&&!wasCancelled){
+    throw new Error('__RESEARCH_STALLED__');
+  }
 }
 
 function regenerateResearch(query){
@@ -2418,12 +2424,13 @@ async function openArtifact(id){
   openCanvas(artifact.content||'',artifact.title||artifact.path||'Artifact',artifact.isCode,{openPanel:true,sourcePath:artifact.path||''});
 }
 
-async function sendMessage(){
+async function sendMessage(opts){
+  const _silent=opts&&opts.silent;
   const input=document.getElementById('msgInput');const text=input.value.trim();
   if(!text&&!pendingFiles.length)return;
   // Reset continue counter when user sends a new (non-continue) message
   if(!text.startsWith('Continue'))_continueCount=0;
-  if(curChat&&isChatRunning(curChat)){showToast('Already generating in this chat — switch to another chat or wait.','info');return;}
+  if(curChat&&isChatRunning(curChat)){if(!_silent)showToast('Already generating in this chat — switch to another chat or wait.','info');return;}
   // Force-create a new chat if none exists (don't rely on createChat guard)
   if(!curChat){
     try{
@@ -2459,11 +2466,11 @@ async function sendMessage(){
   }
   const files=[...pendingFiles];
 
-  addMsg('user',text,[],{fileNames:files.map(f=>f.name),files});
+  if(!_silent)addMsg('user',text,[],{fileNames:files.map(f=>f.name),files});
   setStatus('Working on it...');
   input.value='';input.style.height='auto';
   pendingFiles=[];renderPF();
-  for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
+  if(!_silent)for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
 
   // ── Research when explicitly activated via tool ──
   // Deep research silently enhances the prompt — no visible plan/modal
@@ -2524,7 +2531,7 @@ async function sendMessage(){
           document.getElementById('msgInput').value=text;
           pendingFiles=files;
           renderPF();
-          await sendMessage();
+          await sendMessage(opts);
           sendMessage._retried=false;
           return;
         }
@@ -2715,15 +2722,37 @@ async function sendMessage(){
                 if(data.title&&data.title!=='New Chat')document.getElementById('topTitle').textContent=data.title;
               }
               setChatRunning(targetChatId,false);
-              // Launch the deep research pipeline inline
+              // Launch the deep research pipeline inline with auto-retry on stall
               setChatRunning(targetChatId,true,{type:'research'});
-              try{
-                await runDeepResearch(rq,contentEl,document.getElementById('chatArea'));
+              const _maxResearchRetries=3;
+              let _researchAttempt=0;
+              let researchSuccess=false;
+              while(_researchAttempt<_maxResearchRetries&&!researchSuccess){
+                _researchAttempt++;
+                try{
+                  await runDeepResearch(rq,contentEl,document.getElementById('chatArea'));
+                  researchSuccess=true;
+                }catch(e){
+                  if(e.message==='__RESEARCH_STALLED__'&&_researchAttempt<_maxResearchRetries){
+                    setStatus(`Research stalled — retrying (${_researchAttempt}/${_maxResearchRetries})...`);
+                    continue;
+                  }
+                  const msg=e.message==='__RESEARCH_STALLED__'?'Research stopped unexpectedly after multiple retries.':e.message;
+                  contentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(msg||'Research failed.')}</div>`;
+                  setStatus('Research failed.');
+                  break;
+                }
+              }
+              if(researchSuccess){
                 await refreshChats();
-              }catch(e){
-                contentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(e.message||'Research failed.')}</div>`;
-                setStatus('Research failed.');
-              }finally{
+                // After research completes, silently auto-continue so the AI can add commentary
+                setChatRunning(targetChatId,false);
+                try{
+                  const inp=document.getElementById('msgInput');
+                  inp.value='The deep research report above is now complete. Provide a brief executive summary highlighting the 3-5 most important findings, key takeaways, and any actionable recommendations. Be concise.';
+                  sendMessage({silent:true});
+                }catch(_){}
+              }else{
                 setChatRunning(targetChatId,false);
               }
               return;
@@ -2761,7 +2790,7 @@ async function sendMessage(){
               setTimeout(()=>{
                 const inp=document.getElementById('msgInput');
                 inp.value='Continue where you left off. Pick up exactly where you stopped.';
-                sendMessage();
+                sendMessage({silent:true});
               },600);
             }else{
               _continueCount=0;

@@ -1451,6 +1451,10 @@ def prepare_chat_turn(chat, payload):
     if chat.get("custom_instructions"):
         sysprompt += f"\n\n[CHAT-SPECIFIC INSTRUCTIONS]\n{chat['custom_instructions']}"
 
+    # --- Always enable code execution (AI can use it without user activating) ---
+    if "code" not in active_tools:
+        active_tools = list(active_tools) + ["code"]
+
     # --- Active tool instructions (injected silently into system prompt) ---
     tool_instructions = _build_tool_instructions(active_tools)
     if tool_instructions:
