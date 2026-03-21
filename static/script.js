@@ -1524,10 +1524,6 @@ async function loadModels(){
       opt.onclick=()=>{
         if(locked){showUpgradeForModel(m);return;}
         if(unavailable){showToast(m.locked_reason||'Model unavailable','error');return;}
-        if(m.provider!=='google'){
-          showToast(m.label+' is not available yet. Only Gemini models are currently active.','info');
-          return;
-        }
         selectModel(m.id,m.label,m.provider);
       };
       drop.appendChild(opt);
