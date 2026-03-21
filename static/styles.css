@@ -562,12 +562,15 @@ body.light .chat-area::before{
 }
 .ltp-icon{font-size:14px}
 .ltp-label{flex:1}
+.ltp-chevron{transition:transform .25s var(--ease-spring);font-size:10px;color:var(--text-muted)}
+.live-think-panel.ltp-collapsed .ltp-chevron{transform:rotate(-90deg)}
 .ltp-dots{display:flex;gap:4px;align-items:center}
 .ltp-dots span{width:4px;height:4px;border-radius:50%;background:var(--accent);animation:dotWave 1.8s cubic-bezier(.4,0,.2,1) infinite;opacity:.25}
 .ltp-dots span:nth-child(1){animation-delay:0s}
 .ltp-dots span:nth-child(2){animation-delay:.2s}
 .ltp-dots span:nth-child(3){animation-delay:.4s}
-.ltp-body{padding:12px 14px;max-height:200px;overflow-y:auto}
+.ltp-body{padding:12px 14px;max-height:200px;overflow-y:auto;transition:max-height .3s var(--ease-smooth),padding .3s var(--ease-smooth)}
+.live-think-panel.ltp-collapsed .ltp-body{max-height:0!important;padding:0!important;overflow:hidden}
 .ltp-text{
   font-size:12px;line-height:1.7;color:var(--text-muted);
   font-family:var(--mono);white-space:pre-wrap;

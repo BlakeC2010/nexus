@@ -2499,17 +2499,32 @@ async function sendMessage(){
     const decoder=new TextDecoder();
     let buffer='',fullText='',thinkText='',isThinking=false;
 
-    // Create a live thinking panel (hidden until we get thinking_delta)
+    // Create a live thinking panel (collapsed by default — click to expand)
     let thinkPanel=null;
     let thinkTextEl=null;
+    let _thinkSubjectSet=false;
+    function _extractThinkSubject(text){
+      const first=(text||'').split('\n').find(l=>l.trim())||'';
+      const clean=first.replace(/^[-•*#>\s]+/,'').trim();
+      if(clean.length>50)return clean.slice(0,50)+'…';
+      return clean||'your question';
+    }
     function ensureThinkPanel(){
       if(thinkPanel)return;
       const ta=contentEl.querySelector('.think-active');
       if(ta)ta.remove();
       stopThinkingPhrases();
       thinkPanel=document.createElement('div');
-      thinkPanel.className='live-think-panel';
-      thinkPanel.innerHTML='<div class="ltp-header"><span class="ltp-icon">💭</span><span class="ltp-label">Thinking</span><span class="ltp-dots"><span></span><span></span><span></span></span></div><div class="ltp-body"><div class="ltp-text"></div></div>';
+      thinkPanel.className='live-think-panel ltp-collapsed';
+      thinkPanel.innerHTML='<div class="ltp-header" style="cursor:pointer"><span class="ltp-icon">💭</span><span class="ltp-label">Considering your question</span><span class="ltp-chevron">▾</span><span class="ltp-dots"><span></span><span></span><span></span></span></div><div class="ltp-body" style="max-height:0;padding:0;overflow:hidden;transition:max-height .3s var(--ease-smooth),padding .3s var(--ease-smooth)"><div class="ltp-text"></div></div>';
+      const hdr=thinkPanel.querySelector('.ltp-header');
+      const body=thinkPanel.querySelector('.ltp-body');
+      hdr.onclick=()=>{
+        const collapsed=thinkPanel.classList.contains('ltp-collapsed');
+        thinkPanel.classList.toggle('ltp-collapsed',!collapsed);
+        body.style.maxHeight=collapsed?'200px':'0';
+        body.style.padding=collapsed?'12px 14px':'0';
+      };
       contentEl.innerHTML='';
       contentEl.appendChild(thinkPanel);
       thinkTextEl=thinkPanel.querySelector('.ltp-text');
@@ -2534,6 +2549,13 @@ async function sendMessage(){
               ensureThinkPanel();
               thinkTextEl.textContent=thinkText;
               thinkTextEl.scrollTop=thinkTextEl.scrollHeight;
+              // Update the subject label once we have enough text
+              if(!_thinkSubjectSet&&thinkText.length>15){
+                const subj=_extractThinkSubject(thinkText);
+                const lbl=thinkPanel.querySelector('.ltp-label');
+                if(lbl)lbl.textContent='Considering '+subj;
+                _thinkSubjectSet=true;
+              }
               area.scrollTop=area.scrollHeight;
             }
           }else if(data.type==='delta'){
@@ -2562,21 +2584,11 @@ async function sendMessage(){
             // Collapse live thinking panel if present
             if(thinkPanel){
               thinkPanel.classList.add('ltp-done');
+              if(!thinkPanel.classList.contains('ltp-collapsed'))thinkPanel.classList.add('ltp-collapsed');
               const dotsEl=thinkPanel.querySelector('.ltp-dots');
               if(dotsEl)dotsEl.remove();
-              // Make it collapsible
-              const hdr=thinkPanel.querySelector('.ltp-header');
               const body=thinkPanel.querySelector('.ltp-body');
-              if(hdr&&body){
-                hdr.style.cursor='pointer';
-                body.style.maxHeight='0';body.style.padding='0';body.style.overflow='hidden';
-                body.style.transition='max-height .3s var(--ease-smooth), padding .3s var(--ease-smooth)';
-                hdr.onclick=()=>{
-                  const collapsed=body.style.maxHeight==='0px'||body.style.maxHeight==='0';
-                  body.style.maxHeight=collapsed?'200px':'0';
-                  body.style.padding=collapsed?'12px 14px':'0';
-                };
-              }
+              if(body){body.style.maxHeight='0';body.style.padding='0';}
             }
             // Remove thinking indicator if still present
             const thinkIndicator=contentEl.querySelector('.think-active');
@@ -2709,9 +2721,9 @@ async function sendMessage(){
 
 function renderThinkBlock(thinkText){
   const lines=thinkText.split('\n').filter(l=>l.trim());
-  const summary=lines[0]?lines[0].replace(/^[-•*]\s*/,'').slice(0,60):'Reasoning...';
+  const summary=lines[0]?lines[0].replace(/^[-•*#>\s]+/,'').slice(0,50):'your question';
   return `<div class="think-block" onclick="this.classList.toggle('expanded')">
-    <div class="think-header"><span>💭</span> <span>Thought about: ${esc(summary)}</span> <span class="think-chevron">▾</span></div>
+    <div class="think-header"><span>💭</span> <span>Considered ${esc(summary)}</span> <span class="think-chevron">▾</span></div>
     <div class="think-content">${esc(thinkText)}</div>
   </div>`;
 }
