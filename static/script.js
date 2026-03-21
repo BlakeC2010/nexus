@@ -2253,6 +2253,8 @@ function fmtLive(raw){
   html=html.replace(/`(.+?)`/g,'<code class="stream-inline-code">$1</code>');
   // Links
   html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
+  // Bare URLs — auto-link any https?:// not already inside an <a> tag
+  html=html.replace(/(?<!href=")(?<!src=")(?<!">)(https?:\/\/[^\s<"']+)/g,'<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   // Headings (### at start of line)
   html=html.replace(/^(#{1,3})\s+(.+)$/gm,(_,h,text)=>{
     const level=h.length;
@@ -3079,6 +3081,8 @@ function fmt(text){
   });
   // Markdown links: [text](url) — but not images (already handled)
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
+  // Bare URLs — auto-link any https?:// not already inside an <a> tag
+  t=t.replace(/(?<!href=")(?<!src=")(?<!">)(https?:\/\/[^\s<"']+)/g,'<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   t=t.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   t=t.replace(/`(.+?)`/g,'<code style="background:var(--bg-surface);padding:2px 7px;border-radius:4px;font-family:var(--mono);font-size:11.5px;border:1px solid var(--border)">$1</code>');
   t=t.replace(/\n/g,'<br>');

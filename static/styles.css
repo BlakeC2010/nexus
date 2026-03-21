@@ -172,8 +172,8 @@ body.light .sidebar{background:var(--bg-raised)}
   min-height:var(--topbar-h);
 }
 .sb-brand{display:flex;align-items:center;gap:14px}
-.sb-logo{width:42px;height:42px;border-radius:10px;flex-shrink:0;object-fit:contain}
-.sb-title{font-size:20px;font-weight:800;letter-spacing:-.02em;color:var(--text-primary)}
+.sb-logo{width:54px;height:54px;border-radius:12px;flex-shrink:0;object-fit:contain}
+.sb-title{font-size:24px;font-weight:800;letter-spacing:-.02em;color:var(--text-primary)}
 .sb-x{color:var(--text-muted);font-size:15px;padding:4px;border-radius:var(--r-xs);transition:all .15s}
 .sb-x:hover{color:var(--text-primary);background:var(--bg-hover)}
 
