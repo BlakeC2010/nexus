@@ -216,15 +216,10 @@
 <div class="modal" style="width:560px">
   <div class="mh"><h3>Settings</h3><button class="mx" onclick="closeM('settingsModal')">✕</button></div>
   <div class="mb">
-    <p class="st">Memory</p>
-    <p class="hint">Facts here are included in every chat. Gyro can also add them when you say "remember that..."</p>
-    <div class="mem-list" id="memList"></div>
-
-    <hr>
     <p class="st">Profile</p>
     <label>Display Name</label>
     <div class="kr"><input type="text" id="profileName" placeholder="Your name"><button onclick="saveName()">Save</button></div>
-    <div class="kr" style="margin-top:8px"><button onclick="openSetupFromSettings()">Edit Profile</button></div>
+    <div class="kr" style="margin-top:8px"><button onclick="openSetupFromSettings()" style="display:flex;align-items:center;gap:6px">✏️ Edit Setup Wizard</button></div>
     <hr>
 
     <p class="st">Appearance</p>

@@ -676,7 +676,8 @@ body.light .chat-area::before{
 .crb-file-image{flex-direction:column;align-items:flex-start}
 .crb-file-image img{border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,.15)}
 .crb-file-link{display:flex;align-items:center;gap:8px}
-.msg .mermaid-container{margin-top:16px;background:var(--bg-deep);border-radius:var(--r-lg);padding:20px;overflow-x:auto;border:1px solid var(--border);box-shadow:0 2px 12px rgba(0,0,0,.15)}
+.msg .mermaid-container{margin-top:16px;background:linear-gradient(135deg,var(--bg-deep) 0%,rgba(30,27,36,.95) 50%,var(--bg-deep) 100%);border-radius:var(--r-xl);padding:24px;overflow-x:auto;border:1px solid rgba(201,123,66,.15);box-shadow:0 4px 24px rgba(0,0,0,.3),0 0 60px rgba(191,107,58,.04);position:relative}
+.msg .mermaid-container::before{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;background:linear-gradient(135deg,rgba(201,123,66,.2),transparent 40%,transparent 60%,rgba(108,90,183,.15));-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask-composite:exclude;pointer-events:none}
 /* Stream preview — live text + cursor */
 .msg .stream-preview{
   white-space:pre-wrap;color:var(--text-secondary);font-size:13px;line-height:1.7;
@@ -732,27 +733,30 @@ body.light .chat-area::before{
 .msg .artifact-card .meta .name{font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .msg .artifact-card .meta .sub{font-size:10px;color:var(--text-muted)}
 .msg .artifact-card .artifact-arrow{font-size:13px;color:var(--text-muted)}
-.msg .mermaid-container .mermaid{display:flex;justify-content:center;padding:16px 8px}
-.msg .mermaid-container svg{max-width:100%;border-radius:12px}
-/* Mind map node hierarchy — section-based colors for visual separation */
-.msg .mermaid-container svg .node.section-0>rect,.msg .mermaid-container svg .node.section-0>circle,.msg .mermaid-container svg .node.section-0>path{fill:var(--accent)!important;stroke:var(--accent)!important;filter:drop-shadow(0 4px 12px rgba(191,107,58,.35))}
-.msg .mermaid-container svg .node.section-0 .nodeLabel{color:#fff!important;font-weight:700!important}
-.msg .mermaid-container svg .node.section-1>rect,.msg .mermaid-container svg .node.section-1>path{fill:#2d2640!important;stroke:#6c5ab7!important}
-.msg .mermaid-container svg .node.section-1 .nodeLabel{color:#c4b5fd!important}
-.msg .mermaid-container svg .node.section-2>rect,.msg .mermaid-container svg .node.section-2>path{fill:#1e2d3d!important;stroke:#4a90b8!important}
-.msg .mermaid-container svg .node.section-2 .nodeLabel{color:#93c5e8!important}
-.msg .mermaid-container svg .node.section-3>rect,.msg .mermaid-container svg .node.section-3>path{fill:#1f3028!important;stroke:#4a9960!important}
-.msg .mermaid-container svg .node.section-3 .nodeLabel{color:#86d9a0!important}
-.msg .mermaid-container svg .node.section-4>rect,.msg .mermaid-container svg .node.section-4>path{fill:#3d2828!important;stroke:#b85a5a!important}
-.msg .mermaid-container svg .node.section-4 .nodeLabel{color:#e8a0a0!important}
-.msg .mermaid-container svg .node.section-5>rect,.msg .mermaid-container svg .node.section-5>path{fill:#3d3520!important;stroke:#b89a4a!important}
-.msg .mermaid-container svg .node.section-5 .nodeLabel{color:#e8d08a!important}
-.msg .mermaid-container svg .edge path{stroke-width:2px!important;opacity:.5}
+.msg .mermaid-container .mermaid{display:flex;justify-content:center;padding:20px 12px}
+.msg .mermaid-container svg{max-width:100%;border-radius:12px;filter:drop-shadow(0 2px 16px rgba(0,0,0,.25))}
+/* Mind map node hierarchy — rich colors with glow effects */
+.msg .mermaid-container svg .node>rect,.msg .mermaid-container svg .node>circle,.msg .mermaid-container svg .node>polygon,.msg .mermaid-container svg .node>path{rx:10!important;ry:10!important;stroke-width:1.5px!important}
+.msg .mermaid-container svg .node.section-0>rect,.msg .mermaid-container svg .node.section-0>circle,.msg .mermaid-container svg .node.section-0>path{fill:linear-gradient(135deg,#c97b42,#e8a060)!important;fill:#c97b42!important;stroke:#e8a060!important;filter:drop-shadow(0 4px 16px rgba(191,107,58,.45)) drop-shadow(0 0 8px rgba(191,107,58,.2))}
+.msg .mermaid-container svg .node.section-0 .nodeLabel{color:#fff!important;font-weight:700!important;font-size:14px!important}
+.msg .mermaid-container svg .node.section-1>rect,.msg .mermaid-container svg .node.section-1>path{fill:#2d2640!important;stroke:#8b74d4!important;filter:drop-shadow(0 3px 12px rgba(108,90,183,.3))}
+.msg .mermaid-container svg .node.section-1 .nodeLabel{color:#d4c5ff!important;font-weight:600!important}
+.msg .mermaid-container svg .node.section-2>rect,.msg .mermaid-container svg .node.section-2>path{fill:#1a2d3d!important;stroke:#5aa8d4!important;filter:drop-shadow(0 3px 12px rgba(74,144,184,.25))}
+.msg .mermaid-container svg .node.section-2 .nodeLabel{color:#a8d8f0!important;font-weight:600!important}
+.msg .mermaid-container svg .node.section-3>rect,.msg .mermaid-container svg .node.section-3>path{fill:#1a3028!important;stroke:#5ab87a!important;filter:drop-shadow(0 3px 12px rgba(74,153,96,.25))}
+.msg .mermaid-container svg .node.section-3 .nodeLabel{color:#96e8b0!important;font-weight:600!important}
+.msg .mermaid-container svg .node.section-4>rect,.msg .mermaid-container svg .node.section-4>path{fill:#3d2525!important;stroke:#d46b6b!important;filter:drop-shadow(0 3px 12px rgba(184,90,90,.25))}
+.msg .mermaid-container svg .node.section-4 .nodeLabel{color:#f0b0b0!important;font-weight:600!important}
+.msg .mermaid-container svg .node.section-5>rect,.msg .mermaid-container svg .node.section-5>path{fill:#3d3218!important;stroke:#d4a84a!important;filter:drop-shadow(0 3px 12px rgba(184,154,74,.25))}
+.msg .mermaid-container svg .node.section-5 .nodeLabel{color:#f0d890!important;font-weight:600!important}
+.msg .mermaid-container svg .edge path,.msg .mermaid-container svg .flowchart-link{stroke-width:2px!important;opacity:.6;stroke-dasharray:none!important}
+.msg .mermaid-container svg .edgeLabel{font-size:11px!important;font-weight:500!important;fill:var(--text-muted)!important}
 .msg .mermaid-container svg .nodeLabel{font-size:13px!important;font-weight:500!important;letter-spacing:.01em}
-.msg .mermaid-container .mermaid-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-bottom:8px}
-.msg .mermaid-container .mermaid-toolbar button,.msg .mermaid-container .mermaid-toolbar a{padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-surface);font-size:11px;color:var(--text-muted);cursor:pointer;text-decoration:none;font-weight:500;transition:all .15s var(--ease)}
-.msg .mermaid-container .mermaid-toolbar button:hover,.msg .mermaid-container .mermaid-toolbar a:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-hover)}
-.msg .mermaid-container img.mermaid-png{width:100%;height:auto;border-radius:12px;display:block}
+.msg .mermaid-container .mermaid-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-bottom:4px}
+.msg .mermaid-container .mermaid-toolbar button,.msg .mermaid-container .mermaid-toolbar a{width:32px;height:32px;display:inline-flex;align-items:center;justify-content:center;padding:0;border-radius:8px;border:1px solid var(--border);background:var(--bg-surface);font-size:14px;color:var(--text-muted);cursor:pointer;text-decoration:none;transition:all .15s var(--ease)}
+.msg .mermaid-container .mermaid-toolbar button:hover,.msg .mermaid-container .mermaid-toolbar a:hover{background:var(--bg-hover);color:var(--text-primary);border-color:var(--border-hover);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+.msg .mermaid-container img.mermaid-png{width:100%;height:auto;border-radius:12px;display:block;transition:filter .2s}
+.msg .mermaid-container img.mermaid-png:hover{filter:brightness(1.05)}
 
 /* Image expand / lightbox */
 .msg-img-wrap{position:relative;display:inline-block;margin:10px 0;max-width:100%}

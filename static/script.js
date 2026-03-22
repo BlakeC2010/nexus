@@ -1876,7 +1876,7 @@ async function confirmResearchPlan(){
   // Pass the plan along through a temporary global
   window._pendingResearchPlan=planText;
   await sendMessage();
-  window._pendingResearchPlan=null;
+  // Note: _pendingResearchPlan is consumed in the research_trigger handler, don't clear here
 }
 
 async function startResearchFromModal(){
@@ -1977,7 +1977,7 @@ async function runDeepResearch(query,contentEl,area,planText){
 
   const bodyObj={query,depth};
   if(planText)bodyObj.plan=planText;
-  const response=await fetch('/api/research',{
+  const response=await apiFetch('/api/research',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(bodyObj)
   });
@@ -2899,6 +2899,14 @@ async function sendMessage(opts){
             displayReply=displayReply.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES(?:\|multi)?>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
             // Detect <<<CONTINUE>>> tag — AI wants to chain another message
             let shouldContinue=false;
+            // Check backend flag (reliable — detected before clean_response strips tags)
+            if(data.should_continue){
+              shouldContinue=true;
+            }
+            // Fallback: check raw accumulated stream text
+            if(!shouldContinue&&fullText&&fullText.includes('<<<CONTINUE>>>')){
+              shouldContinue=true;
+            }
             if(displayReply.includes('<<<CONTINUE>>>')){
               shouldContinue=true;
               displayReply=displayReply.replace(/<<<CONTINUE>>>/g,'').trim();
@@ -2969,6 +2977,9 @@ async function sendMessage(opts){
             // ── AI-triggered deep research ──
             if(data.research_trigger&&!choiceBlocks.length){
               const rq=data.research_trigger;
+              // Use pending plan from modal if available
+              const planText=window._pendingResearchPlan||undefined;
+              window._pendingResearchPlan=null;
               if(canRender()){
                 contentEl.innerHTML=finalHTML;
                 if(data.title&&data.title!=='New Chat')document.getElementById('topTitle').textContent=data.title;
@@ -2976,7 +2987,7 @@ async function sendMessage(opts){
               setChatRunning(targetChatId,false);
               setChatRunning(targetChatId,true,{type:'research'});
               try{
-                await runDeepResearch(rq,contentEl,document.getElementById('chatArea'));
+                await runDeepResearch(rq,contentEl,document.getElementById('chatArea'),planText);
                 await refreshChats();
                 // After research completes, silently auto-continue so the AI can add commentary
                 setChatRunning(targetChatId,false);
@@ -3140,6 +3151,24 @@ function addMsg(role,text,files,extra={}){
     }
   }
   if(extra.memory_added?.length)html+=`<div class="mops">Remembered: ${extra.memory_added.map(esc).join('; ')}</div>`;
+  // Render persisted image search results on reload
+  if(extra.image_results?.length){
+    const imgMap={};
+    for(const ir of extra.image_results){
+      imgMap[ir.index]=renderImageBlock(ir);
+    }
+    html=html.replace(/<p>\s*%%%IMGBLOCK:(\d+)%%%\s*<\/p>|%%%IMGBLOCK:(\d+)%%%/g,(match,idx1,idx2)=>{
+      const idx=parseInt(idx1||idx2,10);
+      return imgMap[idx]||'';
+    });
+    // If placeholders were already stripped (clean_response removed tags), append images at end
+    const hasPlaceholders=/%%%IMGBLOCK:\d+%%%/.test(html);
+    if(!hasPlaceholders){
+      for(const ir of extra.image_results){
+        html+=renderImageBlock(ir);
+      }
+    }
+  }
   if(role==='user'&&text)html+=`<div class="msg-actions"><button class="msg-action-btn" onclick="editMsg(this)">✎ Edit</button></div>`;
   else if(role==='kairo')html+=`<div class="msg-actions"><button class="msg-action-btn" onclick="retryMsg(this)">↺ Retry</button></div>`;
   div.dataset.text=text||'';
@@ -3268,13 +3297,25 @@ function syncChatTodosToStorage(listId){
   saveProductivityState(state);
 }
 
+let _todoToggleDebounce=0;
 function toggleChatTodo(listId,itemId,parentId){
+  // Debounce rapid clicks (prevents double-toggle)
+  const now=Date.now();
+  if(now-_todoToggleDebounce<200)return;
+  _todoToggleDebounce=now;
   const items=chatTodoStore.get(listId);
   if(!items)return;
   const item=findTodoItem(items,itemId,parentId);
   if(!item)return;
   item.done=!item.done;
   updateRowDOM(listId,itemId,item.done);
+  // If toggling a parent, cascade to all children
+  if(!parentId&&item.subtasks&&item.subtasks.length){
+    for(const sub of item.subtasks){
+      sub.done=item.done;
+      updateRowDOM(listId,sub.id,sub.done);
+    }
+  }
   if(parentId)autoCheckParent(listId,parentId);
   updateChatTodoHeader(listId);
 }
@@ -3417,7 +3458,7 @@ function fmt(text){
     const mindId='mm_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7);
     const title=inferMindMapTitle(restored,blocks.length+1);
     mindMapStore.set(mindId,{title,source:restored});
-    blocks.push(`<div class="mermaid-container" data-mindmap-id="${mindId}"><div class="mermaid-toolbar"><a class="mm-download" href="#" onclick="return false">Download PNG</a></div><pre class="mermaid">${restored}</pre></div>`);
+    blocks.push(`<div class="mermaid-container" data-mindmap-id="${mindId}"><div class="mermaid-toolbar"><button class="mm-copy" onclick="copyMermaidPng(this)" title="Copy to clipboard">📋</button><a class="mm-download" href="#" onclick="return false" title="Download PNG">⬇</a></div><pre class="mermaid">${restored}</pre></div>`);
     // Auto-open in canvas so user can interact with it
     if(!_suppressCanvasAutoOpen) setTimeout(()=>openMindMapCanvas(mindId),150);
     return `%%%BLOCK${blocks.length-1}%%%`;
@@ -3522,7 +3563,6 @@ async function openSettings(){
   }
   if(curUser)document.getElementById('profileName').value=curUser.name||'';
   initDevRawToggle();
-  openMemory();
 }
 
 async function saveKey(p,id){
@@ -4196,18 +4236,31 @@ function openMindMapCanvas(mindId){
 function mermaidSvgToPngDataUrl(svgEl,scale=2){
   return new Promise(resolve=>{
     try{
-      const xml=new XMLSerializer().serializeToString(svgEl);
+      // Clone SVG and inline computed styles for accurate rendering
+      const clone=svgEl.cloneNode(true);
+      const bbox=svgEl.getBBox?svgEl.getBBox():null;
+      const vb=svgEl.viewBox?.baseVal;
+      const w0=vb?.width||bbox?.width||svgEl.clientWidth||svgEl.getBoundingClientRect().width||900;
+      const h0=vb?.height||bbox?.height||svgEl.clientHeight||svgEl.getBoundingClientRect().height||560;
+      clone.setAttribute('width',w0);
+      clone.setAttribute('height',h0);
+      clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+      // Inject stylesheet for fonts
+      const styleEl=document.createElementNS('http://www.w3.org/2000/svg','style');
+      styleEl.textContent='*{font-family:Inter,Segoe UI,sans-serif}';
+      clone.insertBefore(styleEl,clone.firstChild);
+      const xml=new XMLSerializer().serializeToString(clone);
       const blob=new Blob([xml],{type:'image/svg+xml;charset=utf-8'});
       const url=URL.createObjectURL(blob);
       const img=new Image();
       img.onload=()=>{
         try{
-          const w=Math.max(1,Math.ceil((svgEl.viewBox?.baseVal?.width||svgEl.clientWidth||svgEl.getBoundingClientRect().width||900)*scale));
-          const h=Math.max(1,Math.ceil((svgEl.viewBox?.baseVal?.height||svgEl.clientHeight||svgEl.getBoundingClientRect().height||560)*scale));
+          const w=Math.max(1,Math.ceil(w0*scale));
+          const h=Math.max(1,Math.ceil(h0*scale));
           const canvas=document.createElement('canvas');
           canvas.width=w;canvas.height=h;
           const ctx=canvas.getContext('2d');
-          ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--bg-surface')||'#121212';
+          ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--bg-deep')||'#121014';
           ctx.fillRect(0,0,w,h);
           ctx.drawImage(img,0,0,w,h);
           const dataUrl=canvas.toDataURL('image/png');
@@ -4224,6 +4277,34 @@ function mermaidSvgToPngDataUrl(svgEl,scale=2){
       resolve('');
     }
   });
+}
+
+async function copyMermaidPng(btn){
+  const container=btn.closest('.mermaid-container');
+  if(!container)return;
+  const img=container.querySelector('img.mermaid-png');
+  const svg=container.querySelector('svg');
+  try{
+    let blob;
+    if(img&&img.src&&img.src.startsWith('data:')){
+      const resp=await fetch(img.src);
+      blob=await resp.blob();
+    }else if(svg){
+      const dataUrl=await mermaidSvgToPngDataUrl(svg,2);
+      if(!dataUrl){showToast('Failed to copy image.','error');return;}
+      const resp=await fetch(dataUrl);
+      blob=await resp.blob();
+    }else{
+      showToast('No image to copy.','error');return;
+    }
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+    const orig=btn.textContent;
+    btn.textContent='✓';
+    setTimeout(()=>{btn.textContent=orig;},1500);
+    showToast('Copied to clipboard!','success');
+  }catch(e){
+    showToast('Copy failed — try downloading instead.','error');
+  }
 }
 
 async function enhanceMermaidDiagrams(){
@@ -4290,9 +4371,13 @@ async function enhanceMermaidDiagrams(){
     const dl=container.querySelector('.mm-download');
     if(dl){
       const fn=((mm?.title||'mind_map').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'mind_map')+'.png';
-      dl.href=png;
-      dl.download=fn;
-      dl.onclick=null;
+      dl.removeAttribute('href');
+      dl.onclick=(e)=>{
+        e.preventDefault();
+        const a=document.createElement('a');
+        a.href=png;a.download=fn;
+        document.body.appendChild(a);a.click();document.body.removeChild(a);
+      };
     }
   }
 }
@@ -4499,8 +4584,8 @@ function initMermaidTheme(){
   mermaid.initialize({
     startOnLoad:false,
     theme:'base',
-    flowchart:{curve:'basis',htmlLabels:true,nodeSpacing:60,rankSpacing:70,padding:22},
-    mindmap:{padding:24,maxNodeWidth:220},
+    flowchart:{curve:'basis',htmlLabels:true,nodeSpacing:80,rankSpacing:90,padding:28,diagramPadding:20},
+    mindmap:{padding:32,maxNodeWidth:260},
     themeVariables:light?{
       primaryColor:'#fdf6ef',
       primaryTextColor:'#1a1410',
@@ -4516,17 +4601,18 @@ function initMermaidTheme(){
       edgeLabelBackground:'#f3e7d8',
     }:{
       primaryColor:'#1e1b24',
-      primaryTextColor:'#ede6df',
+      primaryTextColor:'#f0e8df',
       primaryBorderColor:'#c97b42',
-      lineColor:'#8b6b50',
+      lineColor:'#9a7a5e',
       secondaryColor:'#252130',
       tertiaryColor:'#2a1f16',
       fontSize:'14px',
       fontFamily:'Inter, Segoe UI, sans-serif',
-      nodeBorder:'#7a5d46',
+      nodeBorder:'#8a6d50',
       mainBkg:'#1a1722',
       clusterBkg:'#16131e',
-      edgeLabelBackground:'#121014',
+      edgeLabelBackground:'#1a1722',
+      nodeTextColor:'#f0e8df',
     }
   });
 }

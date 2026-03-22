@@ -868,6 +868,7 @@ print('Hello world')
 <<<END_CODE>>>
 The code runs server-side and the output is shown to the user. Use print() for visible output. You can use multiple CODE_EXECUTE blocks per response. Available: all Python standard library modules (math, json, csv, datetime, random, collections, itertools, re, statistics, os, sys, etc.) PLUS installed packages: requests, beautifulsoup4, fpdf2, lxml, Pillow (from PIL import Image, ImageDraw, etc.), numpy, matplotlib (use 'Agg' backend: import matplotlib; matplotlib.use('Agg')). You can also pip install additional packages at the start of your code: import subprocess; subprocess.check_call(['pip', 'install', '-q', 'package_name']). 30-second timeout. USE THIS PROACTIVELY — don't just show code and tell the user to run it. If you write code, EXECUTE it.
 When generating files (images, PDFs, etc.), save them to the current working directory. The system will automatically detect new files and display them to the user with download links (images are shown inline).
+PDF GENERATION: Use fpdf2 (import as: from fpdf import FPDF). Example: pdf=FPDF(); pdf.add_page(); pdf.set_font('Helvetica','',12); pdf.cell(0,10,'Hello'); pdf.output('output.pdf'). For Unicode text, use pdf.set_font('Helvetica') — do NOT try to load custom .ttf fonts unless the user provides them. Always call pdf.output() with a filename to save.
 
 CRITICAL CODE EXECUTION RULES:
 - ALWAYS use print() to log EVERY meaningful result — even when generating files. If you create an image, print what you created: print(f"Created {{filename}} ({{width}}x{{height}})")
@@ -1068,6 +1069,8 @@ You have a powerful multi-turn continuation system. Use it aggressively for any 
 - ALWAYS end with <<<CONTINUE>>> if you have more work to do. Only omit it when you are truly finished.
 - If you're about to do code execution, mind maps, image searches, or file operations AND you've already written substantial text, use <<<CONTINUE>>> to split them into separate messages. Don't try to cram everything into one giant response.
 - Even if you're unsure whether you need to continue, err on the side of using <<<CONTINUE>>> — it's better to send an extra message than to leave work unfinished.
+- CRITICAL: When covering MULTIPLE topics/people/items that each need images, DO NOT stop after the first one. Write about ALL of them, include ALL image searches, and use <<<CONTINUE>>> after each set of image searches if you still have more topics to cover. Never leave a multi-item request half-finished.
+- If your response includes <<<IMAGE_SEARCH>>> tags and you still have more content to write, you MUST end that message with <<<CONTINUE>>> so the system chains your next message automatically.
 
 Workspace File Rules:
 - Relative paths from workspace root
@@ -1700,6 +1703,7 @@ def finalize_chat_response(chat, ctx, raw_response):
     }
     if code_results:
         msg_obj["code_results"] = code_results
+    # image_results is injected by the caller after finalize returns
     chat["messages"].append(msg_obj)
     # Track generated files on the chat object for per-chat file listing
     if executed:
@@ -2989,12 +2993,30 @@ def chat_message(chat_id):
         return jsonify({"error": f"API error: {err}", "files": []})
 
     resp, research_query = extract_research_trigger(resp)
+    resp, image_searches = extract_image_searches(resp)
+    image_results = []
+    if image_searches:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        def _img_search(entry):
+            imgs = search_images(entry['query'], num=entry['count'])
+            return entry, imgs
+        with ThreadPoolExecutor(max_workers=min(len(image_searches), 4)) as pool:
+            futs = {pool.submit(_img_search, entry): entry for entry in image_searches}
+            for fut in as_completed(futs):
+                entry, imgs = fut.result()
+                if imgs:
+                    image_results.append({"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']})
     clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, resp)
+    if image_results:
+        chat["messages"][-1]["image_results"] = image_results
+        save_chat(chat)
     result = {"reply": clean, "files": executed, "memory_added": new_facts}
     if code_results:
         result["code_results"] = code_results
     if research_query:
         result["research_trigger"] = research_query
+    if image_results:
+        result["image_results"] = image_results
     return jsonify(result)
 
 
@@ -3094,7 +3116,13 @@ def chat_message_stream(chat_id):
                             image_results.append({"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']})
                         else:
                             failed_image_queries.append(entry['query'])
+            # Detect <<<CONTINUE>>> BEFORE clean_response strips it
+            should_continue = '<<<CONTINUE>>>' in raw_text
             clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
+            # Persist image results in the saved message so they survive reload
+            if image_results:
+                chat["messages"][-1]["image_results"] = image_results
+                save_chat(chat)
             done_payload = {
                 "type": "done",
                 "reply": clean,
@@ -3102,6 +3130,8 @@ def chat_message_stream(chat_id):
                 "memory_added": new_facts,
                 "title": chat.get("title", "New Chat"),
             }
+            if should_continue:
+                done_payload["should_continue"] = True
             if code_results:
                 done_payload["code_results"] = code_results
             if research_query:
@@ -3668,7 +3698,8 @@ def _generate_research_pdf(title, report_md, sources, output_path):
             if self.page_no() > 1:
                 self.set_font("Helvetica", "I", 7)
                 self.set_text_color(160, 160, 160)
-                self.cell(0, 6, f"gyro Research  |  {title[:60]}", align="R", new_x="LMARGIN", new_y="NEXT")
+                safe_title = title[:60].encode("latin-1", "replace").decode("latin-1")
+                self.cell(0, 6, f"gyro Research  |  {safe_title}", align="R", new_x="LMARGIN", new_y="NEXT")
                 self.set_draw_color(220, 220, 220)
                 self.line(10, self.get_y(), 200, self.get_y())
                 self.ln(2)
