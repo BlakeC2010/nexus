@@ -471,9 +471,7 @@ function buildMasterPromptCards(){
 
 function hasWidgetContent(w){
   const type=(w?.type||'focus').toLowerCase();
-  if(type==='recent')return Array.isArray(w.items)&&w.items.length>0;
-  if(type==='todos')return Array.isArray(w.items)&&w.items.length>0;
-  if(type==='nudge')return Array.isArray(w.items)&&w.items.length>0;
+  if(type==='recent'||type==='todos'||type==='nudge'||type==='workflow')return Array.isArray(w.items)&&w.items.length>0;
   if(type==='vision')return!!(w?.text||'').trim();
   if(type==='motivation')return!!(w?.text||'').trim();
   return true;
@@ -509,8 +507,9 @@ function renderHomeWidget(w){
   if(type==='nudge'){
     const items=Array.isArray(w.items)?w.items:[];
     if(!items.length)return'';
+    const catIcons={'stale_chat':'⏸','task_overload':'📋','scope_creep':'📈','stalled_project':'🔄','deadline_soon':'⏰','resource_spread':'🎯','status_friction':'⚡','no_focus':'🧭'};
     const body=items.map(i=>{
-      const icon=i.category==='stale_chat'?'●':'●';
+      const icon=catIcons[i.category]||'●';
       const actionAttr=i.action?`data-nudge-action='${esc(JSON.stringify(i.action))}'`:'';
       return `<div class="wl-nudge-item" ${actionAttr}>`
         +`<span class="wl-nudge-icon">${icon}</span>`
@@ -1855,7 +1854,7 @@ async function cancelCurrentResearch(){
 async function runDeepResearch(query,contentEl,area,planText){
   const depth=deepResearchDepth||'standard';
 
-  const stepNames=['Plan','Search','Read','Analyze','Gap Fill','Cross-Ref','Write','Review','Cite','Export'];
+  const stepNames=['Planner','Search','Read','Analyze','Gap Fill','Synthesize','Write','Verify','Cite','Export'];
   const stepIcons=['1','2','3','4','5','6','7','8','9','10'];
   let currentPct=0, currentStep=0, lastMessage='Preparing research pipeline...';
   let wasCancelled=false;
@@ -2171,6 +2170,24 @@ function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMe
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px'}
 function sendQ(t){document.getElementById('msgInput').value=t;sendMessage()}
 
+function renderImageGrid(query, images){
+  if(!images||!images.length)return'';
+  const cards=images.map(img=>{
+    const safeUrl=esc(img.url||'');
+    const safeThumb=esc(img.thumbnail||img.url||'');
+    const safeTitle=esc(img.title||'');
+    return `<div class="img-grid-card" onclick="openImageLightbox('${safeUrl}','${safeTitle}')">`
+      +`<img src="${safeThumb}" alt="${safeTitle}" loading="lazy" onerror="this.parentElement.style.display='none'">`
+      +`<div class="img-grid-label">${safeTitle}</div>`
+      +`</div>`;
+  }).join('');
+  const countCls=images.length===1?'img-grid-single':'img-grid-pair';
+  return `<div class="img-grid-wrap ${countCls}">`
+    +`<div class="img-grid-header"><span class="img-car-icon">🖼</span> Images for "${esc(query)}"</div>`
+    +`<div class="img-grid-items">${cards}</div>`
+    +`</div>`;
+}
+
 function renderImageCarousel(query, images){
   if(!images||!images.length)return'';
   const cards=images.map(img=>{
@@ -2193,9 +2210,16 @@ function renderImageCarousel(query, images){
     +`</div>`;
 }
 
-function renderChoiceBlock(choices,question){
+function renderImageBlock(ir){
+  if(!ir||!ir.images||!ir.images.length)return'';
+  if(ir.images.length<=3)return renderImageGrid(ir.query, ir.images);
+  return renderImageCarousel(ir.query, ir.images);
+}
+
+function renderChoiceBlock(choices,question,multi){
   const letters='ABCDEFGH';
   const qHTML=question?`<div class="cq-question">${esc(question)}</div>`:'';
+  const multiAttr=multi?'data-multi="true"':'';
   const optsHTML=choices.map((c,i)=>{
     const letter=letters[i]||String(i+1);
     const safeText=esc(c.trim()).replace(/'/g,"\\'");
@@ -2204,16 +2228,24 @@ function renderChoiceBlock(choices,question){
       +`<span class="cq-text">${esc(c.trim())}</span>`
       +`</button>`;
   }).join('');
-  return `<div class="cq-block">${qHTML}<div class="cq-opts">${optsHTML}</div>`
+  const multiHint=multi?'<div class="cq-multi-hint">Select multiple</div>':'';
+  return `<div class="cq-block" ${multiAttr}>${qHTML}${multiHint}<div class="cq-opts">${optsHTML}</div>`
     +`<div class="cq-custom"><input class="cq-input" placeholder="Or type your own answer…" onkeydown="if(event.key==='Enter'){event.preventDefault();pickCustomChoice(this)}"/>`
     +`<button class="cq-send" onclick="pickCustomChoice(this.previousElementSibling)" title="Send">→</button></div></div>`;
 }
 
 function pickChoice(btn,text){
   const block=btn.closest('.cq-block');
-  block.querySelectorAll('.cq-opt').forEach(b=>b.classList.remove('cq-selected'));
-  btn.classList.add('cq-selected');
-  block.dataset.answer=text;
+  const isMulti=block.dataset.multi==='true';
+  if(isMulti){
+    btn.classList.toggle('cq-selected');
+    const selected=[...block.querySelectorAll('.cq-opt.cq-selected')].map(b=>b.querySelector('.cq-text').textContent.trim());
+    block.dataset.answer=selected.join(', ');
+  } else {
+    block.querySelectorAll('.cq-opt').forEach(b=>b.classList.remove('cq-selected'));
+    btn.classList.add('cq-selected');
+    block.dataset.answer=text;
+  }
   _afterChoicePick(block);
 }
 
@@ -2229,14 +2261,16 @@ function pickCustomChoice(input){
 function _afterChoicePick(block){
   const group=block.closest('.cq-group');
   const blocks=group?group.querySelectorAll('.cq-block'):[block];
-  if(blocks.length<=1){
-    // Single question — send immediately (old behavior)
+  const isMulti=block.dataset.multi==='true';
+  const hasSubmitBtn=group&&group.querySelector('.cq-submit-all');
+  if(blocks.length<=1&&!isMulti){
+    // Single question, single-select — send immediately (old behavior)
     block.querySelectorAll('.cq-opt').forEach(b=>{b.disabled=true;b.style.pointerEvents='none';});
     const cr=block.querySelector('.cq-custom');if(cr)cr.style.display='none';
     sendQ(block.dataset.answer);
     return;
   }
-  // Multiple questions — enable submit button when all answered
+  // Multiple questions or multi-select — enable submit button when all answered
   const allAnswered=[...blocks].every(b=>b.dataset.answer);
   const submitBtn=group.querySelector('.cq-submit-all');
   if(submitBtn)submitBtn.disabled=!allAnswered;
@@ -2284,7 +2318,8 @@ function _detectTruncation(text){
 function stripMetaBlocks(text){
   return (text||'')
     .replace(/<<<THINKING>>>[\s\S]*?(<<<END_THINKING>>>|$)/g,'')
-    .replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES>>>[\s\S]*?(<<<END_CHOICES>>>|$)/g,'')
+    .replace(/<<<THINKING[\s\S]*$/g,'')
+    .replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES(?:\|multi)?>>>[\s\S]*?(<<<END_CHOICES>>>|$)/g,'')
     .replace(/<<<IMAGE_SEARCH:\s*.+?>>>/g,'')
     .replace(/<<<DEEP_RESEARCH[:\s][\s\S]*?>>>/g,'')
     .replace(/<<<DEEP_RESEARCH>>>/g,'')
@@ -2663,19 +2698,13 @@ async function sendMessage(opts){
               const body=thinkPanel.querySelector('.ltp-body');
               if(body){body.style.maxHeight='0';body.style.padding='0';}
             }
-            // Remove thinking indicator if still present
-            const thinkIndicator=contentEl.querySelector('.think-active');
-            if(thinkIndicator){
-              thinkIndicator.style.transition='all .35s var(--ease-smooth)';
-              thinkIndicator.style.opacity='0';
-              thinkIndicator.style.transform='translateY(-8px) scale(.95)';
-              thinkIndicator.style.filter='blur(4px)';
-              thinkIndicator.style.maxHeight='0';
-              thinkIndicator.style.padding='0';
-              thinkIndicator.style.margin='0';
-            }
+            // Remove ALL thinking/loading indicators
+            contentEl.querySelectorAll('.think-active,.live-think-panel:not(.ltp-done),.thinking').forEach(el=>{
+              el.classList.add('ltp-done');
+              el.style.animation='none';
+            });
             stopThinkingPhrases();
-            await new Promise(r=>setTimeout(r,250));
+            await new Promise(r=>setTimeout(r,150));
             let finalHTML='';
             let displayReply=data.reply||'';
             // If we already showed thinking live, use it for the think block
@@ -2688,15 +2717,16 @@ async function sendMessage(opts){
               finalHTML+=renderThinkBlock(thinkPart);
             }
             // Strip thinking tags from reply if still present
-            displayReply=displayReply.replace(/<<<THINKING>>>[\s\S]*?<<<END_THINKING>>>/g,'').trim();
+            displayReply=displayReply.replace(/<<<THINKING>>>[\s\S]*?<<<END_THINKING>>>/g,'').replace(/<<<\/?THINKING\/?>>>/g,'').trim();
             // Parse all choice blocks (supports multiple sequential questions)
-            const choiceBlockRe=/(?:<<<QUESTION:(.*?)>>>\n)?<<<CHOICES>>>\n([\s\S]*?)<<<END_CHOICES>>>/g;
+            const choiceBlockRe=/(?:<<<QUESTION:(.*?)>>>\n)?<<<CHOICES(?:\|multi)?>>>\n([\s\S]*?)<<<END_CHOICES>>>/g;
             let choiceBlockMatch;
             const choiceBlocks=[];
             while((choiceBlockMatch=choiceBlockRe.exec(displayReply))!==null){
-              choiceBlocks.push({question:(choiceBlockMatch[1]||'').trim(),choices:choiceBlockMatch[2].trim().split('\n').filter(c=>c.trim())});
+              const isMulti=/<<<CHOICES\|multi>>>/.test(choiceBlockMatch[0]);
+              choiceBlocks.push({question:(choiceBlockMatch[1]||'').trim(),choices:choiceBlockMatch[2].trim().split('\n').filter(c=>c.trim()),multi:isMulti});
             }
-            displayReply=displayReply.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
+            displayReply=displayReply.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES(?:\|multi)?>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
             // Detect <<<CONTINUE>>> tag — AI wants to chain another message
             let shouldContinue=false;
             if(displayReply.includes('<<<CONTINUE>>>')){
@@ -2707,15 +2737,15 @@ async function sendMessage(opts){
             if(choiceBlocks.length){
               finalHTML+='<div class="cq-group">';
               for(const cb of choiceBlocks){
-                if(cb.choices.length)finalHTML+=renderChoiceBlock(cb.choices,cb.question);
+                if(cb.choices.length)finalHTML+=renderChoiceBlock(cb.choices,cb.question,cb.multi);
               }
-              if(choiceBlocks.length>1)finalHTML+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
+              if(choiceBlocks.length>1||choiceBlocks.some(cb=>cb.multi))finalHTML+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
               finalHTML+='</div>';
             }
             const artifactIds=registerArtifactsFromReply(displayReply,data.files||[]);
             if(data.files?.length){
               finalHTML+='<div class="fops">';
-              for(const f of data.files)finalHTML+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${f.action}: ${esc(f.path)}</a></div>`;
+              for(const f of data.files){const fname=f.path.split('/').pop().split('\\').pop();finalHTML+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${esc(f.action==='created'?'Created':'Updated')}: ${esc(fname)}</a></div>`;}
               finalHTML+='</div>';
             }
             finalHTML+=renderArtifactCards(artifactIds,'ready');
@@ -2727,11 +2757,19 @@ async function sendMessage(opts){
             }
             if(data.memory_added?.length)finalHTML+=`<div class="mops">Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
 
-            // ── Image search results carousel ──
+            // ── Image search results — replace inline placeholders ──
             if(data.image_results?.length){
+              // Build a map of index -> rendered HTML
+              const imgMap={};
               for(const ir of data.image_results){
-                finalHTML+=renderImageCarousel(ir.query, ir.images);
+                imgMap[ir.index]=renderImageBlock(ir);
               }
+              // Replace %%%IMGBLOCK:N%%% placeholders in the HTML (may be wrapped in <p> tags by markdown)
+              finalHTML=finalHTML.replace(/<p>\s*%%%IMGBLOCK:(\d+)%%%\s*<\/p>|%%%IMGBLOCK:(\d+)%%%/g,(match,idx1,idx2)=>{
+                const idx=parseInt(idx1||idx2,10);
+                const html=imgMap[idx];
+                return html||'';
+              });
             }
             if(data.failed_images?.length){
               for(const fq of data.failed_images){
@@ -2841,12 +2879,11 @@ function addMsg(role,text,files,extra={}){
   const area=document.getElementById('chatArea');const div=document.createElement('div');
   div.className=`msg ${role}`;let html='';
   if(role==='kairo')html+='<div class="lbl">gyro</div>';
-  if(role==='user'&&extra.fileNames?.length)html+=`<div class="msg-f">${extra.fileNames.map(esc).join(', ')}</div>`;
   if(role==='user'&&extra.files?.length){
     const previews=extra.files.map(f=>{
       const name=esc(f.name||'upload');
       if(f.mime?.startsWith('image/')&&f.data){
-        return `<div class="user-file-preview image"><img src="data:${f.mime};base64,${f.data}" alt="${name}" loading="lazy"><span>${name}</span></div>`;
+        return `<div class="user-file-preview image"><img src="data:${f.mime};base64,${f.data}" alt="${name}" loading="lazy"></div>`;
       }
       return `<div class="user-file-preview"><span>${name}</span></div>`;
     }).join('');
@@ -2860,25 +2897,36 @@ function addMsg(role,text,files,extra={}){
     html+=renderThinkBlock(thinkPart);
   }
   // Parse all choice blocks (supports multiple sequential questions)
-  const choiceBlockRe2=/(?:<<<QUESTION:(.*?)>>>\n)?<<<CHOICES>>>\n([\s\S]*?)<<<END_CHOICES>>>/g;
+  const choiceBlockRe2=/(?:<<<QUESTION:(.*?)>>>\n)?<<<CHOICES(?:\|multi)?>>>\n([\s\S]*?)<<<END_CHOICES>>>/g;
   let cbm2;
   const cBlocks=[];
   while((cbm2=choiceBlockRe2.exec(displayText))!==null){
-    cBlocks.push({question:(cbm2[1]||'').trim(),choices:cbm2[2].trim().split('\n').filter(c=>c.trim())});
+    const isMulti=/<<<CHOICES\|multi>>>/.test(cbm2[0]);
+    cBlocks.push({question:(cbm2[1]||'').trim(),choices:cbm2[2].trim().split('\n').filter(c=>c.trim()),multi:isMulti});
   }
-  displayText=displayText.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
-  html+=fmt(displayText);
+  displayText=displayText.replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES(?:\|multi)?>>>[\s\S]*?<<<END_CHOICES>>>/g,'').trim();
+  // Long user text → collapsible file block
+  if(role==='user'&&displayText.length>600){
+    const lines=displayText.split('\n');
+    const preview=lines.slice(0,3).join('\n');
+    html+=`<div class="user-paste-file"><div class="upf-header" onclick="this.parentElement.classList.toggle('upf-expanded')">`
+      +`<span class="upf-icon">📄</span><span class="upf-label">Pasted text (${lines.length} lines)</span><span class="upf-chevron">▾</span></div>`
+      +`<div class="upf-preview">${esc(preview)}${lines.length>3?'\n…':''}</div>`
+      +`<div class="upf-full"><pre>${esc(displayText)}</pre></div></div>`;
+  } else {
+    html+=fmt(displayText);
+  }
   if(cBlocks.length&&role==='kairo'){
     html+='<div class="cq-group">';
     for(const cb of cBlocks){
-      if(cb.choices.length)html+=renderChoiceBlock(cb.choices,cb.question);
+      if(cb.choices.length)html+=renderChoiceBlock(cb.choices,cb.question,cb.multi);
     }
-    if(cBlocks.length>1)html+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
+    if(cBlocks.length>1||cBlocks.some(cb=>cb.multi))html+='<button class="cq-submit-all" onclick="submitAllChoices(this)" disabled>Submit Answers</button>';
     html+='</div>';
   }
   let artifactIds=[];
   if(role==='kairo')artifactIds=registerArtifactsFromReply(displayText,files||[]);
-  if(files?.length){html+='<div class="fops">';for(const f of files)html+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${f.action}: ${esc(f.path)}</a></div>`;html+='</div>'}
+  if(files?.length){html+='<div class="fops">';for(const f of files){const fname=f.path.split('/').pop().split('\\').pop();html+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${esc(f.action==='created'?'Created':'Updated')}: ${esc(fname)}</a></div>`;}html+='</div>'}
   if(artifactIds.length)html+=renderArtifactCards(artifactIds,'ready');
   if(extra.code_results?.length){
     for(const cr of extra.code_results){
@@ -4176,13 +4224,24 @@ function _detectClientFriction(){
   const stale=nudges.slice(0,2);
   // Task overload
   const state=loadProductivityState();
-  const pending=(state.todos||[]).filter(t=>!t.done);
+  const todos=state.todos||[];
+  const pending=todos.filter(t=>!t.done);
   if(pending.length>=6){
     stale.push({
       category:'task_overload',
       message:`${pending.length} open tasks — time to triage`,
       next_step:'Pick the 1-2 that actually move the needle today and defer the rest.',
       action:{type:'prompt',text:'Help me triage my open tasks and pick the top priorities for today'},
+    });
+  }
+  // Scope creep: many tasks, very few completed
+  const doneCount=todos.filter(t=>t.done).length;
+  if(todos.length>=8&&doneCount<todos.length*0.2){
+    stale.push({
+      category:'scope_creep',
+      message:`Only ${doneCount}/${todos.length} tasks completed — adding faster than finishing`,
+      next_step:'Consider trimming low-value tasks or breaking big ones into smaller wins.',
+      action:{type:'prompt',text:'Help me identify which tasks I can cut or defer — I\'m adding faster than finishing'},
     });
   }
   return stale.slice(0,5);

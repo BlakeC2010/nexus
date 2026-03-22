@@ -867,8 +867,23 @@ Capabilities:
 print('Hello world')
 <<<END_CODE>>>
 The code runs server-side and the output is shown to the user. Use print() for visible output. You can use multiple CODE_EXECUTE blocks per response. Available: all Python standard library modules (math, json, csv, datetime, random, collections, itertools, re, statistics, os, sys, etc.). 15-second timeout. USE THIS PROACTIVELY — don't just show code and tell the user to run it. If you write code, EXECUTE it.
-10. IMAGE SEARCH — you have access to a real image search engine that finds and displays images in a scrollable carousel. To use it, include this tag anywhere in your response:
+10. IMAGE SEARCH — you have a real image search engine that finds and displays images inline in your response. To use it, include this tag WHERE you want the images to appear:
 <<<IMAGE_SEARCH: descriptive search query>>>
+
+You can also control how many images to show:
+<<<IMAGE_SEARCH: descriptive search query | count=N>>>
+
+IMAGE COUNT GUIDELINES:
+- count=1 or count=2: Images display LARGE (no carousel). Perfect for showing a single important reference, a portrait, a specific item, or a side-by-side comparison.
+- count=3: Images display in a large grid. Good for showing a few key examples.
+- count=4 to count=8 (default is 8): Images display in a scrollable carousel. Good for browsing many options, galleries, variety.
+- Choose the count that fits the context — fewer for focused topics, more for exploration/browsing.
+
+PLACEMENT: Images appear EXACTLY where you place the tag. Use this to weave images naturally into your response:
+- Put a portrait right after introducing a person
+- Put comparison images between your discussion of two things
+- Put a single reference image next to its description
+- Put a gallery at the end if it's supplementary
 
 WHEN TO USE image search (use it proactively — don't wait to be asked):
 - User asks to SEE something: "show me", "what does X look like", "picture of", "images of", "photo of"
@@ -891,10 +906,10 @@ WHEN NOT TO USE image search:
 
 RULES:
 - Write descriptive, specific search queries. "Socrates ancient Greek philosopher bust sculpture" is better than just "Socrates"
-- You can use MULTIPLE <<<IMAGE_SEARCH>>> tags in one response for different topics
+- You can use MULTIPLE <<<IMAGE_SEARCH>>> tags in one response for different topics — each appears where you place it
 - Always include explanatory text WITH the images — don't just dump images with no context
 - Do NOT use markdown image syntax ![](url) — you don't have real image URLs. ONLY use <<<IMAGE_SEARCH>>>
-- Prefer to put the image search tag AFTER your text about that topic, so the images appear below your explanation
+- Place the tag where it makes sense in your narrative flow — after introducing a topic, between comparisons, etc.
 11. ANALYZE YOUTUBE VIDEOS — when the user shares a YouTube link, you can watch/analyze the video content and discuss it in detail. The video is provided to you directly.
 12. Interactive questions — you can ask the user multiple-choice questions they can click to answer (they can also type their own response). Use this when it genuinely helps move the conversation forward:
 
@@ -937,6 +952,17 @@ Topic B
 Topic C
 <<<END_CHOICES>>>
 
+Format (multi-select — user can pick more than one):
+<<<QUESTION: Which areas interest you? Pick all that apply.>>>
+<<<CHOICES|multi>>>
+Performance
+Security
+UI Design
+Documentation
+<<<END_CHOICES>>>
+
+Use <<<CHOICES|multi>>> when it makes sense for the user to select multiple options (e.g., "which topics", "select all that apply", feature preferences). Use regular <<<CHOICES>>> when only one answer makes sense.
+
 You can also use choices WITHOUT a question tag — just <<<CHOICES>>> directly — for simple option lists after your text.
 The user can ALWAYS type their own answer instead of picking an option, so choices are suggestions not constraints.
 
@@ -954,12 +980,32 @@ ALSO: Always save the todo list to a file using <<<FILE_CREATE: notes/todos.md>>
 When the user adds items to an existing todo list, output the COMPLETE updated todolist block with ALL items (old + new), not just the new ones. This replaces the previous list in the chat.
 
 15. DEEP RESEARCH — You have a powerful automated research pipeline that performs REAL web searching, source analysis, cross-referencing, and report generation with PDF export.
-When the user asks for research/deep dive/in-depth analysis:
-a) Ask 2-4 quick clarifying questions using <<<CHOICES>>> blocks (aspects to focus on, depth level, etc.)
-b) Once the user answers, trigger the pipeline with: <<<DEEP_RESEARCH: their research query>>>
-c) The system handles everything: web search, source reading, analysis, gap filling, cross-referencing, report writing, and PDF generation.
-DO NOT write research content yourself. DO NOT fake or simulate research. Just ask clarifying questions, then emit <<<DEEP_RESEARCH: query>>> to trigger the real pipeline.
-Your response after the user answers should be brief — acknowledge preferences and output the trigger tag.
+You can trigger this pipeline AUTONOMOUSLY whenever you judge a query merits deep investigation. You do NOT need the user to ask for it explicitly — use your judgment.
+
+To trigger the pipeline, emit this tag in your response:
+<<<DEEP_RESEARCH: detailed research query here>>>
+
+The system handles everything: planning, multi-query web search, source reading, deep analysis, gap filling, cross-referencing, multi-pass report writing, quality review, and PDF/Markdown export.
+
+WHEN TO TRIGGER (use your judgment):
+- The user asks for research, a deep dive, investigation, comprehensive analysis, or anything that benefits from gathering real, current information from multiple web sources
+- The topic is complex enough that a thorough multi-source report would genuinely help
+- The user asks about current events, recent developments, or anything where your training data may be outdated
+- The query spans multiple domains and would benefit from cross-referencing diverse sources
+
+WHEN NOT TO TRIGGER:
+- Simple factual questions you can answer confidently from your knowledge
+- Casual conversation, greetings, or quick tasks
+- Code writing, debugging, or workspace file operations
+- When the user explicitly says they don't want research
+
+HOW TO USE IT:
+- You MAY ask 1-2 quick clarifying questions first if the scope is genuinely unclear (using <<<CHOICES>>> blocks), then trigger on the next response
+- OR you can trigger it immediately if the user's intent is clear — no clarifying questions required
+- Write a detailed, specific research query in the tag — the more specific, the better the results
+- Keep your message brief when triggering — just acknowledge what you're researching and emit the tag
+- DO NOT write research content yourself. DO NOT fake or simulate research. The pipeline does the real work.
+- After the pipeline completes, the system will auto-request a brief executive summary from you.
 
 File operations format:
 <<<FILE_CREATE: path/to/file.md>>>
@@ -1031,14 +1077,41 @@ Workspace File Rules:
 - When creating or updating files, check if other files reference the same concepts and suggest updates.
 - Format cross-references clearly: "This connects to [project/X.md] which mentions..." or "Note: decisions/2026-01-15_api_choice.md affects this project's timeline."
 
-16. LEARNING WORKFLOW PATTERNS:
+16. PROACTIVE WORKFLOW AUTOMATION:
 - Pay attention to sequences of tasks the user commonly does. For example: research → brainstorm → mind map → project file → STATUS.md update.
 - When you recognize the user is in a familiar workflow pattern, proactively suggest the likely next step.
 - If the user just finished research, suggest: "Want me to create a mind map of the key findings?"
-- If the user just brainstormed, suggest: "Should I organize these into a project plan?"
+- If the user just brainstormed, suggest: "Should I organize these into a project plan with tasks?"
 - If the user just made a decision, suggest: "Want me to create a decision record and update STATUS.md?"
 - If the user just created a project file, suggest: "Should I update STATUS.md to reflect this new project?"
 - Track the user's workflow preferences in memory using <<<MEMORY_ADD: Workflow pattern: user prefers [pattern]>>> when you notice a repeated sequence.
+- After completing multi-step work (e.g. research + mind map + file saves), proactively suggest the natural next workflow: "Now that we've mapped this out, want me to create a todo list to start executing?"
+- When you've done 2+ related operations in a conversation, offer to chain the next logical step without waiting to be asked.
+
+17. IDEA TO ACTION TRANSFORMER:
+- When the user shares brainstorming content, a mind map, a brain dump, or free-form ideas, PROACTIVELY offer to transform them into a structured, executable plan.
+- Don't wait to be asked — if you detect unstructured thinking, offer conversion: "These ideas are great — want me to turn them into a project plan with clear next steps?"
+- The transformation pipeline: Raw ideas → Grouped themes → Prioritized goals → Actionable tasks with owners/deadlines → Todo list + project file
+- When converting, always:
+  1. Group related ideas into themes/categories
+  2. Identify the highest-leverage items
+  3. Create concrete, specific tasks (not vague goals)
+  4. Output both a ```todolist block AND save to a project file
+  5. Suggest a realistic timeline or sequence
+- For mind maps: offer to convert mermaid diagrams into task lists, splitting each branch into actionable steps
+- For brain dumps: extract the implicit goals, decisions needed, and next actions
+- For meeting notes or conversations: pull out action items, decisions made, and follow-ups needed
+- Always frame your offer warmly: "I see some solid ideas here — want me to organize them into something you can actually execute?"
+
+18. PREDICTIVE FRICTION DETECTION:
+- Actively scan workspace context for signals of upcoming friction, not just current problems.
+- SCOPE CREEP signals: If the user keeps adding tasks/projects without completing existing ones, gently flag it: "I notice you're adding new work — want to check if anything can come off the plate first?"
+- CONFLICTING GOALS: If workspace files contain contradictions (e.g. one project needs expansion while another needs focus), flag the tension: "These two goals might pull in different directions — worth a quick alignment check?"
+- DEADLINE RISK: If workspace files mention upcoming dates and recent activity on that work has been low, flag early: "Your [deadline] is coming up and I haven't seen much recent work on it — want to do a quick status check?"
+- STALLED MOMENTUM: If the user had an active project or chat that suddenly went quiet, bring it up once (not repeatedly): "You were making great progress on [X] last week — still on your radar?"
+- RESOURCE SPREAD: If the user is actively working across many projects simultaneously, suggest consolidation: "You've got a lot in flight — want to pick your top 2-3 priorities for this week?"
+- Always frame friction observations as helpful, not nagging. Use "I noticed..." not "You should...". Maximum one friction observation per conversation unless the user asks for more.
+- When you identify friction, always pair it with a concrete smallest-next-step suggestion.
 
 Session Info:
 - {('The user is on a guest account. They have not provided a name — do not call them "Guest" as if it were their name. Just say "hey" or "hey there" instead.' if is_guest else "The user" + chr(39) + "s name is " + uname)}
@@ -1160,10 +1233,34 @@ def extract_research_trigger(text):
     return text, None
 
 def extract_image_searches(text):
-    """Extract all <<<IMAGE_SEARCH: query>>> tags and return (cleaned_text, [queries])."""
-    queries = [m.group(1).strip() for m in re.finditer(r'<<<IMAGE_SEARCH:\s*(.+?)>>>', text)]
-    cleaned = re.sub(r'<<<IMAGE_SEARCH:\s*.+?>>>', '', text).strip()
-    return cleaned, queries
+    """Extract <<<IMAGE_SEARCH: query>>> or <<<IMAGE_SEARCH: query | count=N>>> tags.
+    Returns (text_with_placeholders, [{'query': str, 'count': int, 'index': int}]).
+    Tags are replaced with <!--IMGBLOCK:index--> placeholders so images render inline."""
+    pattern = re.compile(r'<<<IMAGE_SEARCH:\s*(.+?)>>>')
+    searches = []
+    idx = 0
+    def _replace(m):
+        nonlocal idx
+        raw = m.group(1).strip()
+        # Parse optional | count=N
+        count = 8  # default
+        query = raw
+        if '|' in raw:
+            parts = [p.strip() for p in raw.split('|', 1)]
+            query = parts[0]
+            for param in parts[1].split(','):
+                param = param.strip()
+                if param.lower().startswith('count='):
+                    try:
+                        count = max(1, min(int(param.split('=', 1)[1].strip()), 20))
+                    except ValueError:
+                        pass
+        searches.append({'query': query, 'count': count, 'index': idx})
+        placeholder = f'%%%IMGBLOCK:{idx}%%%'
+        idx += 1
+        return placeholder
+    result_text = pattern.sub(_replace, text)
+    return result_text, searches
 
 def search_images(query, num=8):
     """Search images with DuckDuckGo (single fast attempt) + Bing fallback."""
@@ -1359,21 +1456,15 @@ def _build_tool_instructions(active_tools):
             "Keep code focused and concise. The execution has a 15-second timeout."
         ),
         "research": (
-            "[TOOL ACTIVE: DEEP RESEARCH]\n"
-            "The user wants deep, thorough research. You have access to a powerful 10-step research pipeline that does REAL web searching, source analysis, cross-referencing, and report generation.\n"
-            "IMPORTANT TWO-STEP PROCESS — you MUST follow this order:\n"
-            "STEP 1 (THIS response): Ask 2-4 quick clarifying questions using <<<CHOICES>>> blocks to understand what the user wants. For example:\n"
-            "- What specific aspects or angles to focus on\n"
-            "- Depth level: quick overview vs. comprehensive deep-dive\n"
-            "- Any particular sources, perspectives, or constraints\n"
-            "Keep the questions conversational and relevant to their specific topic.\n"
-            "DO NOT emit <<<DEEP_RESEARCH: ...>>> yet. ONLY ask questions.\n\n"
-            "STEP 2 (NEXT response, after user answers): Acknowledge their preferences briefly, then trigger the pipeline:\n"
-            "<<<DEEP_RESEARCH: their refined research query here>>>\n\n"
-            "CRITICAL RULES:\n"
-            "- NEVER skip Step 1. NEVER emit <<<DEEP_RESEARCH>>> in the same message as your clarifying questions.\n"
-            "- NEVER write research yourself. The pipeline handles everything.\n"
-            "- If the user has ALREADY answered clarifying questions about this topic (check conversation history), go ahead and emit <<<DEEP_RESEARCH: query>>>."
+            "[TOOL HINT: DEEP RESEARCH REQUESTED]\n"
+            "The user has specifically activated the Deep Research tool for this message. "
+            "This is a strong signal they want you to use the <<<DEEP_RESEARCH: query>>> pipeline.\n"
+            "You should strongly consider triggering it. You can:\n"
+            "- Trigger it immediately if their intent is clear: emit <<<DEEP_RESEARCH: detailed query>>>\n"
+            "- Ask 1-2 quick clarifying questions first if the scope is genuinely unclear, then trigger on the next response\n"
+            "- In rare cases, decline if the request truly doesn't need research (e.g. simple greeting)\n"
+            "Remember: DO NOT write research yourself. The pipeline handles real web searching, analysis, and report generation.\n"
+            "Keep your response brief — acknowledge and trigger, or ask quick clarifying questions."
         ),
     }
     for tool in active_tools:
@@ -1417,15 +1508,7 @@ def prepare_chat_turn(chat, payload):
     if not thinking and user_text:
         thinking = _detect_complex_query(user_text)
 
-    # --- Auto-detect research intent and inject tool instructions ---
-    if "research" not in active_tools and user_text:
-        lo = user_text.lower()
-        research_signals = ["deep research", "deep dive", "in-depth", "in depth",
-                            "research on", "research about", "thorough research",
-                            "comprehensive research", "investigate", "do research"]
-        if any(s in lo for s in research_signals):
-            active_tools = list(active_tools) + ["research"]
-
+    # --- Enable web search if search or research tools are active ---
     if not web_search and ("search" in active_tools or "research" in active_tools):
         web_search = True
 
@@ -1623,7 +1706,7 @@ def _summarize_messages(old_messages, resolved):
 
 
 def _detect_friction_points(chats, todos, profile):
-    """Analyze workspace state and surface friction: stale chats, piling tasks, status friction."""
+    """Analyze workspace state and surface friction: stale chats, piling tasks, status friction, predictive signals."""
     now = datetime.datetime.now()
     nudges = []
 
@@ -1660,6 +1743,77 @@ def _detect_friction_points(chats, todos, profile):
             "action": {"type": "prompt", "text": "Help me triage my open tasks and pick the top priorities for today"},
         })
 
+    # --- Scope creep: todos growing fast without completions ---
+    done_count = len([t for t in (todos or []) if t.get("done")])
+    total_count = len(todos or [])
+    if total_count >= 8 and done_count < total_count * 0.2:
+        nudges.append({
+            "category": "scope_creep",
+            "message": f"Only {done_count}/{total_count} tasks done — scope may be expanding faster than execution",
+            "next_step": "Consider trimming low-value tasks or breaking big ones into smaller wins.",
+            "action": {"type": "prompt", "text": "Help me identify which tasks I can cut or defer — I'm adding faster than finishing"},
+        })
+
+    # --- Stalled project files: project .md files not updated in 7+ days ---
+    projects_dir = Path(__file__).parent / "projects"
+    if projects_dir.exists():
+        try:
+            for pf in projects_dir.glob("*.md"):
+                mtime = datetime.datetime.fromtimestamp(pf.stat().st_mtime)
+                days_stale = (now - mtime).days
+                if days_stale >= 7:
+                    name = pf.stem.replace("_", " ").replace("-", " ").title()
+                    nudges.append({
+                        "category": "stalled_project",
+                        "message": f"Project \"{name}\" hasn't been updated in {days_stale} days",
+                        "next_step": "Quick check: still active, paused, or done? One line update keeps it alive.",
+                        "action": {"type": "prompt", "text": f"Help me do a quick status check on my \"{name}\" project — is it still active?"},
+                    })
+        except Exception:
+            pass
+
+    # --- Deadline proximity: scan workspace files for upcoming dates ---
+    try:
+        date_pattern = re.compile(
+            r'(?:deadline|due|by|before|target)[:\s]+(\d{4}-\d{2}-\d{2})', re.IGNORECASE)
+        all_files = read_workspace_files()
+        for fpath, content in all_files.items():
+            for m in date_pattern.finditer(content[:5000]):
+                try:
+                    dt = datetime.datetime.strptime(m.group(1), "%Y-%m-%d")
+                    days_left = (dt - now).days
+                    if 0 <= days_left <= 3:
+                        fname = Path(fpath).name
+                        plural = "s" if days_left != 1 else ""
+                        time_note = "today!" if days_left == 0 else f"{days_left} day{plural} away"
+                        nudges.append({
+                            "category": "deadline_soon",
+                            "message": f"Deadline in {fname}: {m.group(1)} — {time_note}",
+                            "next_step": "Make sure this is on track — what's the one thing to finish first?",
+                            "action": {"type": "prompt", "text": f"I have a deadline on {m.group(1)} mentioned in {fname}. Help me make sure I'm on track."},
+                        })
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+
+    # --- Resource spread: too many active projects ---
+    if projects_dir.exists():
+        try:
+            recent_projects = [
+                pf for pf in projects_dir.glob("*.md")
+                if (now - datetime.datetime.fromtimestamp(pf.stat().st_mtime)).days < 7
+            ]
+            if len(recent_projects) >= 5:
+                nudges.append({
+                    "category": "resource_spread",
+                    "message": f"{len(recent_projects)} active projects in the last week — spreading thin?",
+                    "next_step": "Pick your top 2-3 priorities and pause the rest to protect focus.",
+                    "action": {"type": "prompt", "text": "I have too many active projects. Help me pick the top 2-3 to focus on and pause the rest."},
+                })
+        except Exception:
+            pass
+
     # --- STATUS.md friction items ---
     status_path = Path(__file__).parent / "STATUS.md"
     if status_path.exists():
@@ -1694,7 +1848,7 @@ def _detect_friction_points(chats, todos, profile):
             "action": {"type": "prompt", "text": "Help me define my current focus for this week"},
         })
 
-    return nudges[:5]
+    return nudges[:6]
 
 
 def _build_cross_references(files):
@@ -1742,12 +1896,12 @@ def _build_cross_references(files):
 
 
 def _detect_workflow_patterns(chats):
-    """Analyze recent chat history to detect common workflow sequences."""
+    """Analyze recent chat history to detect common workflow sequences and suggest next actions."""
     patterns = []
-    if not chats or len(chats) < 3:
+    if not chats or len(chats) < 2:
         return patterns
 
-    # Analyze the titles/topics of recent chats to detect sequences
+    # --- Phase 1: Classify chats by activity type using titles AND message content ---
     recent_titles = [c.get("title", "").lower() for c in chats[:15]]
 
     research_kw = {"research", "investigate", "study", "analyze", "report", "sources", "deep dive"}
@@ -1767,7 +1921,26 @@ def _detect_workflow_patterns(chats):
         elif title_matches(t, write_kw): recent_types.append("write")
         elif title_matches(t, decide_kw): recent_types.append("decide")
 
-    # Detect the most recent type and suggest next step
+    # --- Phase 2: Analyze actual actions from recent chats (files, code, research) ---
+    action_counts = {"file_ops": 0, "code_runs": 0, "research": 0, "mind_maps": 0, "todos": 0, "memory": 0}
+    for c in chats[:10]:
+        gen_files = c.get("generated_files") or []
+        action_counts["file_ops"] += len(gen_files)
+        msgs = c.get("messages") or []
+        for msg in msgs[-10:]:
+            text = msg.get("text") or ""
+            if msg.get("code_results"):
+                action_counts["code_runs"] += 1
+            if "<<<DEEP_RESEARCH" in text or msg.get("research_id"):
+                action_counts["research"] += 1
+            if "```mermaid" in text:
+                action_counts["mind_maps"] += 1
+            if "```todolist" in text:
+                action_counts["todos"] += 1
+            if msg.get("memory_added"):
+                action_counts["memory"] += len(msg["memory_added"]) if isinstance(msg.get("memory_added"), list) else 1
+
+    # --- Phase 3: Suggest next step based on recent activity type ---
     if recent_types:
         latest = recent_types[0]
         suggestions = {
@@ -1778,8 +1951,8 @@ def _detect_workflow_patterns(chats):
             },
             "brainstorm": {
                 "detected": "You've been brainstorming",
-                "suggestion": "Want to organize these ideas into a project plan?",
-                "action": {"type": "prompt", "text": "Help me organize my brainstorming ideas into a structured project plan"},
+                "suggestion": "Want to turn those ideas into a structured project plan with tasks?",
+                "action": {"type": "prompt", "text": "Turn my brainstorming ideas into a structured project plan with actionable tasks"},
             },
             "plan": {
                 "detected": "You've been planning",
@@ -1800,7 +1973,36 @@ def _detect_workflow_patterns(chats):
         if latest in suggestions:
             patterns.append(suggestions[latest])
 
-    # Detect repeated sequences (e.g. research→brainstorm pattern)
+    # --- Phase 4: Action-based workflow suggestions ---
+    if action_counts["mind_maps"] >= 1 and action_counts["todos"] == 0:
+        patterns.append({
+            "detected": "Mind maps created but no task lists yet",
+            "suggestion": "Convert your mind maps into actionable todo lists to start executing.",
+            "action": {"type": "prompt", "text": "Turn my recent mind maps into an actionable todo list with clear next steps"},
+        })
+
+    if action_counts["research"] >= 1 and action_counts["file_ops"] < 2:
+        patterns.append({
+            "detected": "Research done but few files saved",
+            "suggestion": "Save your key findings to workspace files so they're always accessible.",
+            "action": {"type": "prompt", "text": "Summarize my recent research findings and save them to organized workspace files"},
+        })
+
+    if action_counts["file_ops"] >= 5 and action_counts["todos"] == 0:
+        patterns.append({
+            "detected": "Lots of file activity but no task tracking",
+            "suggestion": "You're creating content fast — a todo list could help you stay organized.",
+            "action": {"type": "prompt", "text": "Create a todo list based on the files I've been working on recently"},
+        })
+
+    if action_counts["code_runs"] >= 3:
+        patterns.append({
+            "detected": "Active coding session detected",
+            "suggestion": "Want to document what you've built or create tests?",
+            "action": {"type": "prompt", "text": "Help me document the code I've been working on and suggest next improvements"},
+        })
+
+    # --- Phase 5: Detect recurring workflow sequences ---
     if len(recent_types) >= 2:
         pair = f"{recent_types[1]}→{recent_types[0]}"
         common_flows = {
@@ -1808,6 +2010,8 @@ def _detect_workflow_patterns(chats):
             "brainstorm→plan": "You like to plan right after brainstorming — nice workflow!",
             "plan→write": "Planning then writing — your systematic approach is working!",
             "decide→write": "Making decisions then documenting — great habit!",
+            "research→write": "Research then write — you work fast from findings to output!",
+            "brainstorm→write": "Brainstorm then write — creative to concrete, solid pattern!",
         }
         if pair in common_flows:
             patterns.append({
@@ -1816,13 +2020,13 @@ def _detect_workflow_patterns(chats):
                 "action": None,
             })
 
-    return patterns[:3]
+    return patterns[:4]
 
 
 def _widget_has_content(w):
     """Check if a widget has meaningful content to display."""
     wtype = (w.get("type") or "focus").lower()
-    if wtype in ("recent", "todos", "nudge"):
+    if wtype in ("recent", "todos", "nudge", "workflow"):
         items = w.get("items") or []
         return isinstance(items, list) and len(items) > 0
     if wtype in ("vision", "motivation", "focus"):
@@ -1890,6 +2094,17 @@ def _fallback_home_widgets(user_name, profile, chats, todos, visions):
             "title": "Your command center is ready",
             "text": "Add tasks or start a chat to make this dashboard uniquely yours.",
         }]
+
+    # Workflow automation — surface detected patterns
+    wf_patterns = _detect_workflow_patterns(chats)
+    if wf_patterns:
+        widgets.append({
+            "type": "workflow",
+            "size": "medium",
+            "title": "Workflow Insights",
+            "subtitle": "Based on your recent activity",
+            "items": wf_patterns,
+        })
 
     widgets = [w for w in widgets if _widget_has_content(w)]
     return {"heading": heading, "widgets": widgets[:6]}
@@ -2692,17 +2907,6 @@ def chat_message(chat_id):
         return jsonify({"error": f"API error: {err}", "files": []})
 
     resp, research_query = extract_research_trigger(resp)
-    # Safety: block research trigger if AI hasn't asked clarifying questions yet
-    if research_query and "research" in ctx.get("active_tools", []):
-        has_prior_clarification = False
-        for prev_msg in reversed(chat.get("messages", [])[-8:]):
-            if prev_msg.get("role") == "assistant":
-                ptxt = prev_msg.get("text", "")
-                if "<<<CHOICE" in ptxt or "CHOICE:" in ptxt:
-                    has_prior_clarification = True
-                    break
-        if not has_prior_clarification:
-            research_query = None
     clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, resp)
     result = {"reply": clean, "files": executed, "memory_added": new_facts}
     if code_results:
@@ -2791,35 +2995,23 @@ def chat_message_stream(chat_id):
                     raw_text = f"<<<THINKING>>>\n{think_text}\n<<<END_THINKING>>>\n{raw_text}"
             # Check if AI triggered deep research
             raw_text, research_query = extract_research_trigger(raw_text)
-            # Safety: block research trigger if AI hasn't asked clarifying questions yet
-            if research_query and "research" in ctx.get("active_tools", []):
-                has_prior_clarification = False
-                for prev_msg in reversed(chat.get("messages", [])[-8:]):
-                    if prev_msg.get("role") == "assistant":
-                        ptxt = prev_msg.get("text", "")
-                        if "<<<CHOICE" in ptxt or "CHOICE:" in ptxt:
-                            has_prior_clarification = True
-                            break
-                if not has_prior_clarification:
-                    # AI skipped clarifying questions — suppress the trigger
-                    research_query = None
             # Extract image search queries and fetch results (parallel)
-            raw_text, image_queries = extract_image_searches(raw_text)
+            raw_text, image_searches = extract_image_searches(raw_text)
             image_results = []
             failed_image_queries = []
-            if image_queries:
+            if image_searches:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                def _img_search(iq):
-                    imgs = search_images(iq)
-                    return iq, imgs
-                with ThreadPoolExecutor(max_workers=min(len(image_queries), 4)) as pool:
-                    futs = {pool.submit(_img_search, iq): iq for iq in image_queries}
+                def _img_search(entry):
+                    imgs = search_images(entry['query'], num=entry['count'])
+                    return entry, imgs
+                with ThreadPoolExecutor(max_workers=min(len(image_searches), 4)) as pool:
+                    futs = {pool.submit(_img_search, entry): entry for entry in image_searches}
                     for fut in as_completed(futs):
-                        iq, imgs = fut.result()
+                        entry, imgs = fut.result()
                         if imgs:
-                            image_results.append({"query": iq, "images": imgs})
+                            image_results.append({"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']})
                         else:
-                            failed_image_queries.append(iq)
+                            failed_image_queries.append(entry['query'])
             clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
             done_payload = {
                 "type": "done",
@@ -3495,7 +3687,15 @@ def _generate_research_pdf(title, report_md, sources, output_path):
     pdf.output(str(output_path))
 
 def _run_research_job(job_id, query, depth, resolved, user_plan=None):
-    """Background thread: multi-step deep research pipeline with deep thinking."""
+    """Background thread: multi-agent research pipeline.
+
+    Architecture:
+      1. Planner Agent   — decomposes query into sub-questions & search strategy
+      2. Researcher Agents — parallel search, fetch, and per-source analysis
+      3. Synthesizer Agent — cross-references findings and writes the report
+      4. Verifier Agent   — fact-checks, flags contradictions, patches gaps
+      5. Export           — PDF + Markdown generation
+    """
     job = _research_jobs[job_id]
 
     def push(evt_type, **kw):
@@ -3503,6 +3703,18 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
 
     def is_cancelled():
         return job.get("cancelled", False)
+
+    def safe_ai_call(prompt, max_tokens=4096, timeout=90, fallback=""):
+        """Wrapper around _research_ai_call with robust error handling."""
+        try:
+            result = _research_ai_call(prompt, resolved, max_tokens=max_tokens, timeout=timeout)
+            if result and "[AI error" not in result:
+                return result
+            print(f"  [research] AI call returned error or empty: {(result or '')[:100]}")
+            return fallback
+        except Exception as e:
+            print(f"  [research] AI call exception: {e}")
+            return fallback
 
     depth_cfg = {
         "quick":    {"sub_q": 5,  "searches_per_q": 2, "urls_per_q": 5,  "max_fetch": 15,  "detail": "concise but insightful", "analysis_words": "300-500", "report_min": 2000, "max_report_tokens": 8000},
@@ -3513,18 +3725,16 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
     total_steps = 10
     try:
         # ══════════════════════════════════════════════════════════════
-        # STEP 1: Deep Query Analysis & Research Planning
+        # AGENT 1: PLANNER — Decompose query & build search strategy
         # ══════════════════════════════════════════════════════════════
         push("progress", step="planning", pct=1, total_steps=total_steps, current_step=1,
-             message="Analyzing research topic and formulating investigation strategy...")
+             message="Planner agent analyzing topic and formulating investigation strategy...")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # Use user-provided plan if available
         user_plan_text = user_plan or ""
         if user_plan_text.strip():
-            # Parse user plan directly
             sub_questions = []
             search_queries = {}
             angle_idx = 0
@@ -3533,19 +3743,18 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
                 m = re.match(r"^\s*\d+[.)]\s+(.+)", s)
                 if m:
                     sq = m.group(1).strip()
-                    # Check for search queries after a pipe or dash
                     if " | " in sq or " — " in sq:
                         parts = re.split(r"\s*[|—]\s*", sq)
                         sq = parts[0].strip()
                         search_queries[angle_idx] = [p.strip().strip('"\'') for p in parts[1:] if p.strip()]
                     sub_questions.append(sq)
                     angle_idx += 1
-            sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"] + 4]  # allow user to add extra
+            sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"] + 4]
             push("progress", step="planning", pct=5, total_steps=total_steps, current_step=1,
                  message=f"Using your custom plan: {len(sub_questions)} investigation angles.")
         else:
-            plan = _research_ai_call(
-                f"""You are a senior research strategist. Deeply analyze this research topic and create a comprehensive research plan.
+            plan = safe_ai_call(
+                f"""You are a senior research strategist (Planner Agent). Deeply analyze this research topic and create a comprehensive research plan.
 
 RESEARCH TOPIC: {query}
 
@@ -3572,16 +3781,15 @@ Angle 2: "query1" | "query2" | "query3"
 
 KEY_TERMS:
 <comma-separated list of key technical terms, names, and concepts to watch for>""",
-                resolved, max_tokens=2000
+                max_tokens=2000, fallback=""
             )
 
-            # Parse sub-questions
             sub_questions = []
             search_queries = {}
             in_angles = False
             in_strategy = False
             angle_idx = 0
-            for line in plan.split("\n"):
+            for line in (plan or "").split("\n"):
                 s = line.strip()
                 if "RESEARCH_ANGLES" in s:
                     in_angles = True; in_strategy = False; continue
@@ -3602,6 +3810,10 @@ KEY_TERMS:
 
             sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"]]
 
+        # Fallback: if planner produced nothing useful, use the raw query
+        if not sub_questions:
+            sub_questions = [query]
+
         push("progress", step="planning", pct=7, total_steps=total_steps, current_step=1,
              message=f"Research plan ready: {len(sub_questions)} investigation angles identified.",
              plan_angles=sub_questions)
@@ -3610,8 +3822,10 @@ KEY_TERMS:
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 2: Multi-Query Web Search
+        # AGENT 2: RESEARCHERS — Parallel web search & source extraction
         # ══════════════════════════════════════════════════════════════
+
+        # --- Phase 2a: Multi-query web search ---
         all_results, seen_urls = [], set()
         total_searches = sum(len(search_queries.get(i, [sub_questions[i]])) for i in range(len(sub_questions))) + 1
         search_done = 0
@@ -3619,7 +3833,6 @@ KEY_TERMS:
         for sq_idx, sq in enumerate(sub_questions):
             if is_cancelled():
                 push("cancelled"); job["status"] = "cancelled"; return
-
             queries = search_queries.get(sq_idx, [sq])
             if not queries:
                 queries = [sq]
@@ -3627,25 +3840,44 @@ KEY_TERMS:
                 if is_cancelled():
                     push("cancelled"); job["status"] = "cancelled"; return
                 search_done += 1
-                pct = 7 + int((search_done / total_searches) * 18)
+                pct = 7 + int((search_done / max(total_searches, 1)) * 18)
                 push("progress", step="searching", pct=min(pct, 25), total_steps=total_steps, current_step=2,
                      message=f"Searching [{search_done}/{total_searches}]: {search_q[:75]}...")
-                for r in _ddg_search(search_q, max_results=depth_cfg["urls_per_q"]):
-                    if r["url"] and r["url"] not in seen_urls:
-                        seen_urls.add(r["url"])
-                        r["sub_question"] = sq
-                        r["search_query"] = search_q
-                        all_results.append(r)
+                try:
+                    for r in _ddg_search(search_q, max_results=depth_cfg["urls_per_q"]):
+                        if r["url"] and r["url"] not in seen_urls:
+                            seen_urls.add(r["url"])
+                            r["sub_question"] = sq
+                            r["search_query"] = search_q
+                            all_results.append(r)
+                except Exception as e:
+                    print(f"  [research] Search failed for '{search_q[:50]}': {e}")
 
         # Also search the main query directly
         search_done += 1
         push("progress", step="searching", pct=25, total_steps=total_steps, current_step=2,
              message=f"Searching main topic: {query[:75]}...")
-        for r in _ddg_search(query, max_results=8):
-            if r["url"] and r["url"] not in seen_urls:
-                seen_urls.add(r["url"])
-                r["sub_question"] = query
-                all_results.append(r)
+        try:
+            for r in _ddg_search(query, max_results=8):
+                if r["url"] and r["url"] not in seen_urls:
+                    seen_urls.add(r["url"])
+                    r["sub_question"] = query
+                    all_results.append(r)
+        except Exception as e:
+            print(f"  [research] Main search failed: {e}")
+
+        if not all_results:
+            push("progress", step="searching", pct=27, total_steps=total_steps, current_step=2,
+                 message="No search results found. Attempting broader search...")
+            # Broader fallback search
+            try:
+                for r in _ddg_search(query.split()[0] if query.split() else query, max_results=10):
+                    if r["url"] and r["url"] not in seen_urls:
+                        seen_urls.add(r["url"])
+                        r["sub_question"] = query
+                        all_results.append(r)
+            except Exception:
+                pass
 
         push("progress", step="searching", pct=27, total_steps=total_steps, current_step=2,
              message=f"Found {len(all_results)} unique sources across {search_done} searches.")
@@ -3653,9 +3885,7 @@ KEY_TERMS:
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # ══════════════════════════════════════════════════════════════
-        # STEP 3: Source Content Extraction  (parallel)
-        # ══════════════════════════════════════════════════════════════
+        # --- Phase 2b: Parallel source content extraction ---
         from concurrent.futures import ThreadPoolExecutor, as_completed
         fetched = []
         fetch_total = min(len(all_results), depth_cfg["max_fetch"])
@@ -3666,7 +3896,10 @@ KEY_TERMS:
         def _fetch_one(result):
             if is_cancelled():
                 return None
-            return (result, _fetch_url_text(result["url"], timeout=10))
+            try:
+                return (result, _fetch_url_text(result["url"], timeout=10))
+            except Exception:
+                return (result, None)
 
         done_count = 0
         with ThreadPoolExecutor(max_workers=10) as pool:
@@ -3674,14 +3907,17 @@ KEY_TERMS:
             for future in as_completed(futures):
                 if is_cancelled():
                     push("cancelled"); job["status"] = "cancelled"; return
-                pair = future.result()
-                if pair:
-                    result, text = pair
-                    if text and len(text) > 150:
-                        fetched.append({**result, "text": text})
+                try:
+                    pair = future.result()
+                    if pair:
+                        result, text = pair
+                        if text and len(text) > 150:
+                            fetched.append({**result, "text": text})
+                except Exception:
+                    pass
                 done_count += 1
                 if done_count % 5 == 0 or done_count == fetch_total:
-                    pct = 27 + int((done_count / fetch_total) * 13)
+                    pct = 27 + int((done_count / max(fetch_total, 1)) * 13)
                     push("progress", step="reading", pct=min(pct, 40), total_steps=total_steps, current_step=3,
                          message=f"Read {done_count}/{fetch_total} sources ({len(fetched)} extracted)...")
 
@@ -3697,19 +3933,22 @@ KEY_TERMS:
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # ══════════════════════════════════════════════════════════════
-        # STEP 4: Deep Analysis Per Source (with reasoning)
-        # ══════════════════════════════════════════════════════════════
-        source_analyses = []
-        for idx, src in enumerate(fetched):
-            if is_cancelled():
-                push("cancelled"); job["status"] = "cancelled"; return
-            pct = 40 + int(((idx + 1) / len(fetched)) * 16)
-            push("progress", step="analyzing", pct=min(pct, 56), total_steps=total_steps, current_step=4,
-                 message=f"Deep analyzing [{idx+1}/{len(fetched)}]: {(src.get('title') or src['url'])[:55]}...")
+        # If we still have no sources at all, generate a report from AI knowledge alone
+        if not fetched:
+            push("progress", step="reading", pct=42, total_steps=total_steps, current_step=3,
+                 message="No web sources extracted. Generating report from AI knowledge...")
 
-            analysis = _research_ai_call(
-                f"""You are a critical research analyst performing deep analysis on a source.
+        # --- Phase 2c: Deep analysis per source (researcher agents) ---
+        source_analyses = []
+        analysis_total = len(fetched)
+        if analysis_total > 0:
+            # Parallel analysis for speed (up to 4 concurrent)
+            def _analyze_source(idx_src):
+                idx, src = idx_src
+                if is_cancelled():
+                    return None
+                return safe_ai_call(
+                    f"""You are a critical research analyst (Researcher Agent) performing deep analysis on a source.
 
 MAIN RESEARCH TOPIC: {query}
 SUB-QUESTION THIS SOURCE ADDRESSES: {src.get('sub_question', query)}
@@ -3718,7 +3957,7 @@ SOURCE: {src.get('title','')} — {src['url']}
 CONTENT:
 {src['text'][:7000]}
 
-Perform deep thinking analysis:
+Perform deep analysis:
 
 1. RELEVANCE: How relevant is this to our research topic? (high/medium/low)
 2. KEY FINDINGS: Extract every important fact, statistic, quote, argument, and data point relevant to the research topic. Be exhaustive.
@@ -3728,16 +3967,33 @@ Perform deep thinking analysis:
 6. GAPS: What questions does this raise or leave unanswered?
 
 Write {depth_cfg['analysis_words']} words of detailed analysis.""",
-                resolved, max_tokens=1500
-            )
-            if analysis and "[AI error" not in analysis:
-                source_analyses.append({
-                    "title": src.get("title", ""),
-                    "url": src["url"],
-                    "snippet": src.get("snippet", ""),
-                    "sub_question": src.get("sub_question", ""),
-                    "analysis": analysis,
-                })
+                    max_tokens=1500, fallback=""
+                ), src
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = {pool.submit(_analyze_source, (i, src)): (i, src) for i, src in enumerate(fetched)}
+                done_a = 0
+                for future in as_completed(futures):
+                    if is_cancelled():
+                        push("cancelled"); job["status"] = "cancelled"; return
+                    try:
+                        result = future.result()
+                        if result:
+                            analysis, src = result
+                            if analysis:
+                                source_analyses.append({
+                                    "title": src.get("title", ""),
+                                    "url": src["url"],
+                                    "snippet": src.get("snippet", ""),
+                                    "sub_question": src.get("sub_question", ""),
+                                    "analysis": analysis,
+                                })
+                    except Exception as e:
+                        print(f"  [research] Analysis future error: {e}")
+                    done_a += 1
+                    pct = 40 + int((done_a / max(analysis_total, 1)) * 16)
+                    push("progress", step="analyzing", pct=min(pct, 56), total_steps=total_steps, current_step=4,
+                         message=f"Deep analyzing [{done_a}/{analysis_total}] — {len(source_analyses)} analyzed...")
 
         push("progress", step="analyzing", pct=56, total_steps=total_steps, current_step=4,
              message=f"Deep analysis complete: {len(source_analyses)} sources thoroughly analyzed.")
@@ -3746,7 +4002,7 @@ Write {depth_cfg['analysis_words']} words of detailed analysis.""",
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 5: Gap Analysis & Supplemental Search
+        # AGENT 2 (cont): Gap Analysis & Supplemental Search
         # ══════════════════════════════════════════════════════════════
         push("progress", step="gap-analysis", pct=57, total_steps=total_steps, current_step=5,
              message="Identifying knowledge gaps and searching for missing information...")
@@ -3756,8 +4012,9 @@ Write {depth_cfg['analysis_words']} words of detailed analysis.""",
             for i, s in enumerate(source_analyses)
         )
 
-        gap_result = _research_ai_call(
-            f"""You are a research quality analyst. Review everything we've found so far and identify CRITICAL GAPS.
+        if source_analyses:
+            gap_result = safe_ai_call(
+                f"""You are a research quality analyst. Review everything we've found so far and identify CRITICAL GAPS.
 
 RESEARCH TOPIC: {query}
 INVESTIGATION ANGLES: {'; '.join(sub_questions)}
@@ -3776,44 +4033,46 @@ GAP_SEARCHES:
 2. "<specific search query to fill gap 2>"
 3. "<specific search query to fill gap 3>"
 (list 2-5 gap-filling searches, or "NONE" if coverage is sufficient)""",
-            resolved, max_tokens=800
-        )
+                max_tokens=800, fallback=""
+            )
 
-        # Do supplemental searches for gaps
-        gap_searches = []
-        for line in (gap_result or "").split("\n"):
-            m = re.match(r'^\s*\d+[.)]\s*"?([^"]+)"?\s*$', line.strip())
-            if m and m.group(1).strip().upper() != "NONE":
-                gap_searches.append(m.group(1).strip())
+            gap_searches = []
+            for line in (gap_result or "").split("\n"):
+                m = re.match(r'^\s*\d+[.)]\s*"?([^"]+)"?\s*$', line.strip())
+                if m and m.group(1).strip().upper() != "NONE":
+                    gap_searches.append(m.group(1).strip())
 
-        if gap_searches and not is_cancelled():
-            for gi, gsq in enumerate(gap_searches[:4]):
-                if is_cancelled():
-                    break
-                push("progress", step="gap-analysis", pct=57 + int(((gi+1)/len(gap_searches[:4]))*5),
-                     total_steps=total_steps, current_step=5,
-                     message=f"Gap search [{gi+1}/{len(gap_searches[:4])}]: {gsq[:65]}...")
-                for r in _ddg_search(gsq, max_results=5):
-                    if r["url"] and r["url"] not in seen_urls:
-                        seen_urls.add(r["url"])
-                        text = _fetch_url_text(r["url"])
-                        if text and len(text) > 150:
-                            analysis = _research_ai_call(
-                                f"""Quickly extract key facts from this source relevant to: {query}
+            if gap_searches and not is_cancelled():
+                for gi, gsq in enumerate(gap_searches[:4]):
+                    if is_cancelled():
+                        break
+                    push("progress", step="gap-analysis", pct=57 + int(((gi+1)/len(gap_searches[:4]))*5),
+                         total_steps=total_steps, current_step=5,
+                         message=f"Gap search [{gi+1}/{len(gap_searches[:4])}]: {gsq[:65]}...")
+                    try:
+                        for r in _ddg_search(gsq, max_results=5):
+                            if r["url"] and r["url"] not in seen_urls:
+                                seen_urls.add(r["url"])
+                                text = _fetch_url_text(r["url"])
+                                if text and len(text) > 150:
+                                    analysis = safe_ai_call(
+                                        f"""Quickly extract key facts from this source relevant to: {query}
 SOURCE: {r.get('title','')} — {r['url']}
 CONTENT: {text[:5000]}
 
 List the most important facts, data points, and insights. Be concise but thorough.""",
-                                resolved, max_tokens=600
-                            )
-                            if analysis and "[AI error" not in analysis:
-                                source_analyses.append({
-                                    "title": r.get("title", ""),
-                                    "url": r["url"],
-                                    "snippet": r.get("snippet", ""),
-                                    "sub_question": gsq,
-                                    "analysis": analysis,
-                                })
+                                        max_tokens=600, fallback=""
+                                    )
+                                    if analysis:
+                                        source_analyses.append({
+                                            "title": r.get("title", ""),
+                                            "url": r["url"],
+                                            "snippet": r.get("snippet", ""),
+                                            "sub_question": gsq,
+                                            "analysis": analysis,
+                                        })
+                    except Exception as e:
+                        print(f"  [research] Gap search failed for '{gsq[:50]}': {e}")
 
         push("progress", step="gap-analysis", pct=63, total_steps=total_steps, current_step=5,
              message=f"Gap analysis complete. Total sources: {len(source_analyses)}.")
@@ -3828,16 +4087,16 @@ List the most important facts, data points, and insights. Be concise but thoroug
         )
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 6: Cross-Reference & Synthesis Thinking
+        # AGENT 3: SYNTHESIZER — Cross-reference & write report
         # ══════════════════════════════════════════════════════════════
         push("progress", step="cross-referencing", pct=64, total_steps=total_steps, current_step=6,
-             message="Cross-referencing findings and identifying patterns...")
+             message="Synthesizer agent cross-referencing findings and identifying patterns...")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        cross_ref = _research_ai_call(
-            f"""You are synthesizing research findings. Deeply analyze ALL source analyses below and produce a synthesis framework.
+        cross_ref = safe_ai_call(
+            f"""You are a Synthesizer Agent. Deeply analyze ALL source analyses below and produce a synthesis framework.
 
 RESEARCH TOPIC: {query}
 
@@ -3855,7 +4114,7 @@ Produce:
 7. REPORT OUTLINE: Create a detailed section-by-section outline for the final report, with bullet points of what should go in each section.
 
 Be thorough and analytical.""",
-            resolved, max_tokens=4000
+            max_tokens=4000, fallback=""
         )
 
         push("progress", step="cross-referencing", pct=70, total_steps=total_steps, current_step=6,
@@ -3864,25 +4123,27 @@ Be thorough and analytical.""",
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # ══════════════════════════════════════════════════════════════
-        # STEP 7: Multi-Pass Report Writing
-        # ══════════════════════════════════════════════════════════════
+        # --- Synthesizer: Multi-pass report writing ---
         push("progress", step="writing", pct=71, total_steps=total_steps, current_step=7,
-             message="Writing comprehensive research report (pass 1: core content)...")
+             message="Synthesizer agent writing comprehensive research report (pass 1: core content)...")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        report_md = _research_ai_call(
-            f"""You are an expert research writer producing a {depth_cfg['detail']} research report.
+        # Build source context string — use cross-ref if available, else raw analyses
+        synthesis_ctx = cross_ref[:8000] if cross_ref else "No cross-reference synthesis available."
+        source_ctx = analyses_block[:20000] if analyses_block else "No detailed source analyses available."
+
+        report_md = safe_ai_call(
+            f"""You are an expert Synthesizer Agent producing a {depth_cfg['detail']} research report.
 
 TOPIC: {query}
 
 SYNTHESIS FRAMEWORK:
-{cross_ref[:8000]}
+{synthesis_ctx}
 
 SOURCE ANALYSES:
-{analyses_block[:20000]}
+{source_ctx}
 
 Write a {depth_cfg['detail']} research report. Requirements:
 
@@ -3934,21 +4195,22 @@ QUALITY REQUIREMENTS:
 - Draw connections between different findings
 - Address limitations and gaps in the available information
 - Every major claim should reference evidence from the sources""",
-            resolved, max_tokens=depth_cfg["max_report_tokens"]
+            max_tokens=depth_cfg["max_report_tokens"],
+            fallback=f"# Research Report: {query}\n\n*Report generation encountered an issue. Sources analyzed below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses)
         )
 
-        if not report_md or "[AI error" in report_md:
+        if not report_md:
             report_md = f"# Research Report: {query}\n\n*Error generating report. Sources analyzed below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses)
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
         # Pass 2: Enhancement (for standard and deep)
-        if depth in ("standard", "deep") and report_md and "[AI error" not in report_md:
+        if depth in ("standard", "deep") and report_md and "Error generating report" not in report_md:
             push("progress", step="writing", pct=80, total_steps=total_steps, current_step=7,
                  message="Enhancing report (pass 2: depth and polish)...")
-            enhanced = _research_ai_call(
-                f"""You are a senior editor reviewing and enhancing a research report. Your job is to significantly improve it.
+            enhanced = safe_ai_call(
+                f"""You are a senior editor (Synthesizer Agent, pass 2) reviewing and enhancing a research report.
 
 ORIGINAL REPORT:
 {report_md[:20000]}
@@ -3968,19 +4230,19 @@ ENHANCEMENT INSTRUCTIONS:
 9. Add relevant comparisons, analogies, or frameworks that make the content more accessible
 
 Output the COMPLETE enhanced report in markdown. Do not truncate or abbreviate — write the full report.""",
-                resolved, max_tokens=depth_cfg["max_report_tokens"]
+                max_tokens=depth_cfg["max_report_tokens"], fallback=""
             )
-            if enhanced and "[AI error" not in enhanced and len(enhanced) > len(report_md) * 0.7:
+            if enhanced and len(enhanced) > len(report_md) * 0.7:
                 report_md = enhanced
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
         # Pass 3: Deep polish for deep mode
-        if depth == "deep" and report_md and "[AI error" not in report_md:
+        if depth == "deep" and report_md and "Error generating report" not in report_md:
             push("progress", step="writing", pct=84, total_steps=total_steps, current_step=7,
                  message="Final polish pass (pass 3: expert review)...")
-            polished = _research_ai_call(
+            polished = safe_ai_call(
                 f"""You are a world-class editor doing a final polish on a research report. Focus on:
 1. Ensure no section feels rushed or superficial
 2. Add nuance where claims are too absolute
@@ -3993,9 +4255,9 @@ REPORT:
 {report_md[:22000]}
 
 Output the COMPLETE polished report. Do not truncate.""",
-                resolved, max_tokens=depth_cfg["max_report_tokens"]
+                max_tokens=depth_cfg["max_report_tokens"], fallback=""
             )
-            if polished and "[AI error" not in polished and len(polished) > len(report_md) * 0.7:
+            if polished and len(polished) > len(report_md) * 0.7:
                 report_md = polished
 
         push("progress", step="writing", pct=87, total_steps=total_steps, current_step=7,
@@ -4005,27 +4267,55 @@ Output the COMPLETE polished report. Do not truncate.""",
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 8: Fact-Check & Quality Review
+        # AGENT 4: VERIFIER — Fact-check & quality review
         # ══════════════════════════════════════════════════════════════
         push("progress", step="reviewing", pct=88, total_steps=total_steps, current_step=8,
-             message="Running fact-check and quality review...")
+             message="Verifier agent running fact-check and quality review...")
 
-        quality_check = _research_ai_call(
-            f"""Review this research report for quality and accuracy.
+        quality_check = safe_ai_call(
+            f"""You are a Verifier Agent. Review this research report for quality and accuracy.
 
 REPORT:
 {report_md[:16000]}
 
-Check for:
-1. Any unsupported or potentially inaccurate claims
-2. Internal contradictions
-3. Missing important perspectives
-4. Sections that need more evidence
+SOURCE DATA (to verify claims against):
+{analyses_block[:8000]}
 
-If you find issues, list them briefly. If the report is solid, say "QUALITY: PASS".
+Check for:
+1. Any unsupported or potentially inaccurate claims — flag them
+2. Internal contradictions between sections
+3. Missing important perspectives that sources covered
+4. Sections that need more evidence
+5. Claims that contradict the source data
+
+If you find critical issues that need fixing, list specific corrections.
+If the report is solid, say "QUALITY: PASS".
+
 Then provide a one-paragraph "Research Limitations" section that should be appended to the report.""",
-            resolved, max_tokens=1000
+            max_tokens=1500, fallback="QUALITY: PASS"
         )
+
+        # If verifier found critical issues, attempt targeted fix
+        if quality_check and "QUALITY: PASS" not in quality_check and "specific corrections" not in quality_check.lower():
+            # Extract corrections and apply them
+            corrections_text = quality_check.split("Research Limitations")[0] if "Research Limitations" in quality_check else quality_check
+            if len(corrections_text.strip()) > 50 and "Error generating report" not in report_md:
+                push("progress", step="reviewing", pct=90, total_steps=total_steps, current_step=8,
+                     message="Verifier found issues — applying corrections...")
+                fixed = safe_ai_call(
+                    f"""Apply these corrections to the research report. Output the COMPLETE corrected report.
+
+CORRECTIONS:
+{corrections_text[:3000]}
+
+REPORT:
+{report_md[:20000]}
+
+Fix ONLY the specific issues raised. Do not rewrite sections that are fine. Output the COMPLETE report.""",
+                    max_tokens=depth_cfg["max_report_tokens"], fallback=""
+                )
+                if fixed and len(fixed) > len(report_md) * 0.7:
+                    report_md = fixed
 
         # Append limitations if provided
         if quality_check and "Research Limitations" in quality_check:
@@ -4047,7 +4337,6 @@ Then provide a one-paragraph "Research Limitations" section that should be appen
         push("progress", step="citing", pct=93, total_steps=total_steps, current_step=9,
              message="Compiling source attributions...")
 
-        # Append a Sources section to the report
         if source_analyses:
             report_md += "\n\n---\n\n## Sources & References\n\n"
             for idx, src in enumerate(source_analyses, 1):
@@ -4060,7 +4349,7 @@ Then provide a one-paragraph "Research Limitations" section that should be appen
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 10: PDF & File Generation
+        # STEP 10: PDF & File Export
         # ══════════════════════════════════════════════════════════════
         push("progress", step="exporting", pct=96, total_steps=total_steps, current_step=10,
              message="Generating PDF and Markdown reports...")
@@ -4071,15 +4360,20 @@ Then provide a one-paragraph "Research Limitations" section that should be appen
         md_fn  = f"research_{safe_q}_{ts}.md"
         rdir   = WORKSPACE / "notes" / "research"
         rdir.mkdir(parents=True, exist_ok=True)
-        (rdir / md_fn).write_text(
-            f"# {query}\n\n{report_md}",
-            encoding="utf-8"
-        )
+        try:
+            (rdir / md_fn).write_text(
+                f"# {query}\n\n{report_md}",
+                encoding="utf-8"
+            )
+        except Exception as md_err:
+            print(f"  [research] Markdown save failed: {md_err}")
+
         pdf_ok = False
         try:
             _generate_research_pdf(query, report_md, source_analyses, rdir / pdf_fn)
             pdf_ok = True
         except Exception as pdf_err:
+            print(f"  [research] PDF generation failed: {pdf_err}")
             push("progress", step="exporting", pct=98, total_steps=total_steps, current_step=10,
                  message=f"PDF note: {pdf_err} — markdown saved.")
 
@@ -4097,6 +4391,9 @@ Then provide a one-paragraph "Research Limitations" section that should be appen
         job["status"] = "done"
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"  [research] Pipeline crashed: {e}\n{tb}")
         push("error", error=f"Research failed: {e}")
         job["status"] = "error"
 
@@ -4139,7 +4436,7 @@ def research_plan():
         return jsonify({"error": "No AI API key configured. Add a key in Settings first."}), 400
 
     plan_text = _research_ai_call(
-        f"""You are a senior research strategist. Deeply analyze this research topic and create a comprehensive research plan.
+        f"""You are a Planner Agent. Deeply analyze this research topic and create a comprehensive research plan.
 
 RESEARCH TOPIC: {query}
 
@@ -4204,11 +4501,13 @@ def start_research():
         depth = "standard"
 
     settings = load_settings()
-    # Pick best available model for research (prefer pro models)
+    # Pick best available model for research — try pro models, fall back to default
     available_model = None
-    for mid in ("gemini-3.1-pro-preview", "gemini-3-flash-preview"):
+    for mid in ("gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"):
         mi = MODELS.get(mid, {})
-        api_key, _ = resolve_provider_key(settings, mi.get("provider","google"))
+        if not mi:
+            continue
+        api_key, _ = resolve_provider_key(settings, mi.get("provider", "google"))
         if api_key:
             available_model = mid
             break
