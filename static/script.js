@@ -1,6 +1,7 @@
 // ─── State ────────────────────────────────────────
 let curChat=null,allChats=[],ttsOn=false,recording=false,recognition=null,pendingFiles=[],pendingFolder='';
 let _continueCount=0;const _MAX_CONTINUES=15;
+let _nextStreamId=0;
 let curUser=null,isGuest=false,authMode='login',theme='dark',googleClientId='';
 let googleInitDone=false,thinkingEnabled=false,guestAuthMode='register';
 let deepResearchDepth='standard';
@@ -302,7 +303,14 @@ function toggleDevRaw(on){
 }
 function initDevRawToggle(){
   const cb=document.getElementById('devRawToggle');
-  if(cb){cb.checked=devRawMode;toggleDevRaw(devRawMode);}
+  if(!cb)return;
+  cb.checked=devRawMode;
+  // Update toggle visuals without re-rendering the chat
+  const dot=document.getElementById('devRawDot');
+  if(dot){
+    dot.style.transform=devRawMode?'translateX(18px)':'none';
+    dot.style.background=devRawMode?'var(--accent)':'var(--text-muted)';
+  }
 }
 
 async function reRenderCurrentChat(){
@@ -2650,11 +2658,12 @@ async function openArtifact(id){
 async function sendMessage(opts){
   const _silent=opts&&opts.silent;
   const _noThinking=opts&&opts.noThinking;
-  const input=document.getElementById('msgInput');const text=input.value.trim();
+  const input=document.getElementById('msgInput');
+  const text=(opts&&opts.message)?opts.message:input.value.trim();
   if(!text&&!pendingFiles.length)return;
   // Reset continue counter when user sends a new (non-continue) message
-  if(!text.startsWith('Continue'))_continueCount=0;
-  if(curChat&&isChatRunning(curChat)){if(!_silent)showToast('Already generating in this chat — switch to another chat or wait.','info');return;}
+  if(!_silent&&!text.startsWith('Continue'))_continueCount=0;
+  if(curChat&&isChatRunning(curChat)&&!_silent){showToast('Already generating in this chat — switch to another chat or wait.','info');return;}
   // Force-create a new chat if none exists (don't rely on createChat guard)
   if(!curChat){
     try{
@@ -2692,7 +2701,7 @@ async function sendMessage(opts){
 
   if(!_silent)addMsg('user',text,[],{fileNames:files.map(f=>f.name),files});
   setStatus('Working on it...');
-  input.value='';input.style.height='auto';
+  if(!(opts&&opts.message)){input.value='';input.style.height='auto';}
   pendingFiles=[];renderPF();
   if(!_silent)for(const f of files)uploadedHistory.unshift({name:f.name,mime:f.mime,when:Date.now()});
 
@@ -2701,7 +2710,8 @@ async function sendMessage(opts){
   // It's sent as part of activeTools in the normal chat flow
 
   const controller=new AbortController();
-  setChatRunning(targetChatId,true,{type:'chat',controller});
+  const streamId=++_nextStreamId;
+  setChatRunning(targetChatId,true,{type:'chat',controller,streamId});
   const area=document.getElementById('chatArea');
 
   const msgDiv=document.createElement('div');
@@ -2957,7 +2967,7 @@ async function sendMessage(opts){
             if(data.memory_added?.length)finalHTML+=`<div class="mops">Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
 
             // ── Image search — show loading placeholders for pending images ──
-            if(data.pending_images?.length){
+            if(!devRawMode&&data.pending_images?.length){
               for(const pi of data.pending_images){
                 const loaderId=`img-loader-${pi.index}`;
                 const loaderHTML=`<div class="img-grid-wrap img-loading-placeholder" id="${loaderId}" data-img-index="${pi.index}"><div class="img-grid-header"><span class="img-car-icon">🖼</span> Searching images for "${esc(pi.query)}"...</div><div class="img-loading-shimmer"><div class="img-shimmer-bar"></div><div class="img-shimmer-bar"></div><div class="img-shimmer-bar short"></div></div></div>`;
@@ -2968,7 +2978,7 @@ async function sendMessage(opts){
             }
 
             // Also replace any remaining image results that came synchronously (reload/history)
-            if(data.image_results?.length){
+            if(!devRawMode&&data.image_results?.length){
               const imgMap={};
               for(const ir of data.image_results){
                 imgMap[ir.index]=renderImageBlock(ir);
@@ -2978,7 +2988,7 @@ async function sendMessage(opts){
                 return imgMap[idx]||'';
               });
             }
-            if(data.failed_images?.length){
+            if(!devRawMode&&data.failed_images?.length){
               for(const fq of data.failed_images){
                 finalHTML+=`<div class="img-search-fail"><span class="img-search-fail-icon">🖼</span> Image search for "${esc(fq)}" couldn't load — try again or search manually.</div>`;
               }
@@ -3044,9 +3054,7 @@ async function sendMessage(opts){
               _continueCount++;
               setStatus(`Continuing... (${_continueCount})`);
               setTimeout(()=>{
-                const inp=document.getElementById('msgInput');
-                inp.value='Continue where you left off. Pick up exactly where you stopped.';
-                sendMessage({silent:true,noThinking:true});
+                sendMessage({silent:true,noThinking:true,message:'Continue where you left off. Pick up exactly where you stopped.'});
               },600);
             }else{
               _continueCount=0;
@@ -3060,7 +3068,7 @@ async function sendMessage(opts){
             if(canRender())contentEl.innerHTML=`<div style="color:var(--red)">${esc(data.error)}</div>`;
           }else if(data.type==='image_result'){
             // Async image result — replace the loading placeholder
-            if(canRender()){
+            if(!devRawMode&&canRender()){
               const loader=contentEl.querySelector(`#img-loader-${data.image.index}`);
               if(loader){
                 const html=renderImageBlock(data.image);
@@ -3072,7 +3080,7 @@ async function sendMessage(opts){
             }
           }else if(data.type==='image_failed'){
             // Async image search failed — replace loader with error
-            if(canRender()){
+            if(!devRawMode&&canRender()){
               const loader=contentEl.querySelector(`#img-loader-${data.index}`);
               if(loader){
                 loader.innerHTML=`<div class="img-grid-header"><span class="img-search-fail-icon">🖼</span> Image search for "${esc(data.query)}" couldn't load — try again or search manually.</div>`;
@@ -3094,7 +3102,10 @@ async function sendMessage(opts){
       if(canRender())contentEl.innerHTML=`<div style=\"color:var(--red)\">Connection error: ${esc(errDetail)}<br><small>Is the server running? Check your network.</small></div>`;
     }
   }finally{
-    setChatRunning(targetChatId,false);
+    // Only clear running state if this stream is still the active one
+    // (a silent continue may have started a new stream already)
+    const cur=runningStreams.get(targetChatId);
+    if(!cur||cur.streamId===streamId)setChatRunning(targetChatId,false);
   }
 }
 
@@ -3184,7 +3195,7 @@ function addMsg(role,text,files,extra={}){
   }
   if(extra.memory_added?.length)html+=`<div class="mops">Remembered: ${extra.memory_added.map(esc).join('; ')}</div>`;
   // Render persisted image search results on reload
-  if(extra.image_results?.length){
+  if(!devRawMode&&extra.image_results?.length){
     const imgMap={};
     for(const ir of extra.image_results){
       imgMap[ir.index]=renderImageBlock(ir);
