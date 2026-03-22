@@ -325,6 +325,7 @@ async function reRenderCurrentChat(){
     _suppressCanvasAutoOpen=true;
     if(chat.messages?.length){
       for(const m of chat.messages){
+        if(m.hidden)continue;
         if(m.role==='user')addMsg('user',m.text,[],m);
         else addMsg('kairo',m.text,m.files_modified||[],m);
       }
@@ -1492,6 +1493,7 @@ async function openChat(id){
   _suppressCanvasAutoOpen=true;
   if(chat.messages?.length){
     for(const m of chat.messages){
+      if(m.hidden)continue;
       if(m.role==='user')addMsg('user',m.text,[],m);
       else addMsg('kairo',m.text,m.files_modified||[],m);
     }
@@ -2744,7 +2746,7 @@ async function sendMessage(opts){
     }
 
     const response=await apiFetch(`/api/chats/${targetChatId}/stream`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:messageToSend,files,thinking:_noThinking?false:thinkingEnabled,active_tools:toolsForMsg}),signal:controller.signal});
+      body:JSON.stringify({message:messageToSend,files,thinking:_noThinking?false:thinkingEnabled,active_tools:toolsForMsg,is_continue:!!(opts&&opts.isContinue)}),signal:controller.signal});
 
     const ct=response.headers.get('content-type')||'';
     if(ct.includes('application/json')){
@@ -2929,7 +2931,7 @@ async function sendMessage(opts){
             }else{
               finalHTML+=fmt(displayReply);
             }
-            if(choiceBlocks.length){
+            if(!devRawMode&&choiceBlocks.length){
               finalHTML+='<div class="cq-group">';
               for(const cb of choiceBlocks){
                 if(cb.choices.length)finalHTML+=renderChoiceBlock(cb.choices,cb.question,cb.multi);
@@ -2938,13 +2940,13 @@ async function sendMessage(opts){
               finalHTML+='</div>';
             }
             const artifactIds=registerArtifactsFromReply(displayReply,data.files||[]);
-            if(data.files?.length){
+            if(!devRawMode&&data.files?.length){
               finalHTML+='<div class="fops">';
               for(const f of data.files){const fname=f.path.split('/').pop().split('\\').pop();finalHTML+=`<div class="fo"><a href="/api/files/download?path=${encodeURIComponent(f.path)}" target="_blank" class="fo-link">⬇ ${esc(f.action==='created'?'Created':'Updated')}: ${esc(fname)}</a></div>`;}
               finalHTML+='</div>';
             }
-            finalHTML+=renderArtifactCards(artifactIds,'ready');
-            if(data.code_results?.length){
+            if(!devRawMode)finalHTML+=renderArtifactCards(artifactIds,'ready');
+            if(!devRawMode&&data.code_results?.length){
               for(const cr of data.code_results){
                 const statusCls=cr.success?'code-run-success':'code-run-error';
                 let filesHtml='';
@@ -3054,7 +3056,7 @@ async function sendMessage(opts){
               _continueCount++;
               setStatus(`Continuing... (${_continueCount})`);
               setTimeout(()=>{
-                sendMessage({silent:true,noThinking:true,message:'Continue where you left off. Pick up exactly where you stopped.'});
+                sendMessage({silent:true,noThinking:true,isContinue:true,message:'Continue where you left off. Pick up exactly where you stopped.'});
               },600);
             }else{
               _continueCount=0;
@@ -3161,7 +3163,7 @@ function addMsg(role,text,files,extra={}){
   } else {
     html+=fmt(displayText);
   }
-  if(cBlocks.length&&role==='kairo'){
+  if(!devRawMode&&cBlocks.length&&role==='kairo'){
     html+='<div class="cq-group">';
     for(const cb of cBlocks){
       if(cb.choices.length)html+=renderChoiceBlock(cb.choices,cb.question,cb.multi);

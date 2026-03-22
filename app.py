@@ -1132,6 +1132,7 @@ Session Info:
 - Today: {datetime.date.today().isoformat()}
 - Always try to help. Don't refuse unless the request is clearly and unambiguously harmful. Lean toward engaging creatively with unusual, edgy, or unconventional requests — curiosity beats caution. When in doubt, just answer.
 - Never lecture or moralize. If something seems edgy but isn't actually harmful, engage with it directly without caveats or disclaimers.
+- REMINDER: When discussing people, places, animals, objects, or ANY visual topic, you MUST use <<<IMAGE_SEARCH: descriptive query>>> tags. Do not describe images you would show — actually include the tag so the system fetches real images. If your response covers multiple people or visual topics, include a separate <<<IMAGE_SEARCH>>> for EACH one. When you still have more content after image searches, end with <<<CONTINUE>>> on its own line.
 {creator_section}
 {mem_section}
 {profile_section}
@@ -1548,6 +1549,7 @@ def _build_tool_instructions(active_tools):
 def prepare_chat_turn(chat, payload):
     user_text = (payload.get("message") or "").strip()
     attached = payload.get("files", [])
+    is_continue = bool(payload.get("is_continue"))
     if not user_text and not attached:
         return None, jsonify({"error": "Empty"}), 400
 
@@ -1557,6 +1559,8 @@ def prepare_chat_turn(chat, payload):
         return None, jsonify({"reply": resolved["error"], "files": [], "locked": True}), 403
 
     user_msg = {"role": "user", "text": user_text, "timestamp": datetime.datetime.now().isoformat()}
+    if is_continue:
+        user_msg["hidden"] = True
     images = []
     file_texts = []
     for f in attached:
