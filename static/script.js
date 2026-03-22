@@ -1854,11 +1854,14 @@ async function cancelCurrentResearch(){
 async function runDeepResearch(query,contentEl,area,planText){
   const depth=deepResearchDepth||'standard';
 
-  const stepNames=['Planner','Search','Read','Analyze','Gap Fill','Synthesize','Write','Verify','Cite','Export'];
-  const stepIcons=['1','2','3','4','5','6','7','8','9','10'];
+  const stepNames=['Plan','Scout','Read','Deepen','Synthesize','Verify','Export'];
+  const stepIcons=['1','2','3','4','5','6','7'];
   let currentPct=0, currentStep=0, lastMessage='Preparing research pipeline...';
   let wasCancelled=false;
   let researchCompleted=false;
+  let finalReport='';
+  let finalSources=[];
+  let finalQuery=query;
 
   // Build initial progress card HTML once
   const stepsInitHtml=stepNames.map((name,i)=>{
@@ -1991,19 +1994,32 @@ async function runDeepResearch(query,contentEl,area,planText){
         lastMessage='Research complete!';
         const report=evt.report||'';
         const srcs=evt.sources||[];
+        const isPartial=!!evt.partial;
+        finalReport=report;
+        finalSources=srcs;
         const srcHtml=srcs.slice(0,15).map((s,i)=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title||('Source '+(i+1)))}</a></li>`).join('');
         const dl=[];
         if(evt.pdf_file)dl.push(`<a class="choice-btn" href="/api/research/download/${encodeURIComponent(evt.pdf_file)}">Download PDF</a>`);
         if(evt.md_file)dl.push(`<a class="choice-btn" href="/api/research/download/${encodeURIComponent(evt.md_file)}">Download Markdown</a>`);
+        // Post-processing buttons (separate pipelines)
+        const ppBtns=[];
+        if(!evt.pdf_file)ppBtns.push(`<button class="choice-btn" onclick="postprocessPDF(this)" data-query="${esc(query).replace(/"/g,'&quot;')}">📄 Generate PDF</button>`);
+        ppBtns.push(`<button class="choice-btn" onclick="postprocessMindmap(this)" data-query="${esc(query).replace(/"/g,'&quot;')}">🧠 Build Mind Map</button>`);
+        const partialNote=isPartial?`<div class="research-partial-note" style="background:var(--surface-2);border-left:3px solid var(--amber);padding:8px 12px;margin:8px 0;border-radius:6px;font-size:0.9em;color:var(--text-secondary)">⚠️ This report was generated from partial data. ${evt.error_note||'Some pipeline phases may have been skipped.'}</div>`:'';
         contentEl.innerHTML=`
-          <div class="research-badge">Research complete · ${esc(depth)} · ${Number(evt.source_count||srcs.length)} sources</div>
+          <div class="research-badge">${isPartial?'⚠️ Research (partial)':'✅ Research complete'} · ${esc(depth)} · ${Number(evt.source_count||srcs.length)} sources</div>
+          ${partialNote}
           <div class="research-actions">${dl.join('')}</div>
+          <div class="research-postprocess" style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap">${ppBtns.join('')}</div>
           ${srcHtml?`<div class="research-summary"><strong>Top sources</strong><ol style="margin:8px 0 0 18px">${srcHtml}</ol></div>`:''}
           <div style="margin-top:10px">${fmt(report.slice(0,32000))}</div>
           <button class="research-regen-btn" onclick="regenerateResearch('${esc(query).replace(/'/g,"\\'")}')">🔄 Regenerate</button>
         `;
-        setStatus('Research complete. You can download the report.');
+        setStatus(isPartial?'Research completed with partial data.':'Research complete. You can download the report.');
         researchCompleted=true;
+        // Store for post-processing
+        _lastResearchReport=finalReport;
+        _lastResearchSources=finalSources;
       }else if(evt.type==='error'){
         throw new Error(evt.error||'Research failed.');
       }
@@ -2022,6 +2038,90 @@ function regenerateResearch(query){
   input.value=query;
   if(!activeTools.has('research')) activateTool('research');
   sendMessage();
+}
+
+/* ─── Post-Processing (separate from research pipeline) ─────── */
+let _lastResearchReport='';
+let _lastResearchSources=[];
+
+async function postprocessPDF(btn){
+  if(!btn)return;
+  // Find the report from the closest research result
+  const contentEl=btn.closest('.msg-content')||btn.closest('.msg');
+  const reportText=_lastResearchReport||contentEl?.innerText||'';
+  if(!reportText||reportText.length<100){showToast('No research report found to export.','info');return;}
+
+  const origText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='⏳ Generating PDF...';
+
+  try{
+    const r=await apiFetch('/api/research/export/pdf',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({report:_lastResearchReport,title:btn.dataset.query||'Research Report',sources:_lastResearchSources})});
+    const d=await r.json();
+    if(!r.ok||d.error){
+      showToast(d.error||'PDF generation failed.','error');
+      btn.textContent=origText;btn.disabled=false;
+      return;
+    }
+    // Replace button with download link
+    const link=document.createElement('a');
+    link.className='choice-btn';
+    link.href=`/api/research/download/${encodeURIComponent(d.pdf_file)}`;
+    link.textContent='📄 Download PDF';
+    btn.replaceWith(link);
+    showToast('PDF generated successfully!','success');
+  }catch(e){
+    showToast('PDF generation failed: '+e.message,'error');
+    btn.textContent=origText;btn.disabled=false;
+  }
+}
+
+async function postprocessMindmap(btn){
+  if(!btn)return;
+  if(!_lastResearchReport||_lastResearchReport.length<100){showToast('No research report found.','info');return;}
+
+  const origText=btn.textContent;
+  btn.disabled=true;
+  btn.textContent='⏳ Building mind map...';
+
+  try{
+    const r=await apiFetch('/api/research/export/mindmap',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({report:_lastResearchReport})});
+    const d=await r.json();
+    if(!r.ok||d.error){
+      showToast(d.error||'Mind map generation failed.','error');
+      btn.textContent=origText;btn.disabled=false;
+      return;
+    }
+    // Render mind map inline
+    const mmData=d.mindmap;
+    const mmId='mm_'+Date.now();
+    const mmHtml=_renderMindmapNode(mmData,0);
+    const container=document.createElement('div');
+    container.className='research-mindmap';
+    container.id=mmId;
+    container.innerHTML=`<div class="research-mindmap-title">🧠 Mind Map</div>${mmHtml}`;
+    btn.replaceWith(container);
+    showToast('Mind map generated!','success');
+  }catch(e){
+    showToast('Mind map failed: '+e.message,'error');
+    btn.textContent=origText;btn.disabled=false;
+  }
+}
+
+function _renderMindmapNode(node,level){
+  if(!node||!node.title)return'';
+  const indent=level*20;
+  const isRoot=level===0;
+  const cls=isRoot?'mm-root':'mm-node';
+  const childHtml=(node.children||[]).map(c=>_renderMindmapNode(c,level+1)).join('');
+  return`<div class="${cls}" style="margin-left:${indent}px">
+    <div class="mm-label" style="font-weight:${level<2?'600':'400'};font-size:${Math.max(12,15-level)}px;padding:4px 8px;margin:2px 0;border-left:${level>0?'2px solid var(--accent)':'none'};${isRoot?'font-size:16px;font-weight:700;margin-bottom:6px':''}">
+      ${esc(node.title)}
+    </div>
+    ${childHtml?'<div class="mm-children">'+childHtml+'</div>':''}
+  </div>`;
 }
 
 /* ─── Inline Research Plan (in-chat + canvas) ─────── */

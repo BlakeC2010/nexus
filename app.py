@@ -3717,16 +3717,21 @@ def _generate_research_pdf(title, report_md, sources, output_path):
     pdf.output(str(output_path))
 
 def _run_research_job(job_id, query, depth, resolved, user_plan=None):
-    """Background thread: multi-agent research pipeline.
+    """Background thread: multi-pass fault-tolerant research pipeline.
 
-    Architecture:
-      1. Planner Agent   — decomposes query into sub-questions & search strategy
-      2. Researcher Agents — parallel search, fetch, and per-source analysis
-      3. Synthesizer Agent — cross-references findings and writes the report
-      4. Verifier Agent   — fact-checks, flags contradictions, patches gaps
-      5. Export           — PDF + Markdown generation
+    Architecture (3 passes, each checkpointed & independently retryable):
+      Pass 1 — Plan & Scout: decompose query, budget-capped searches, extract notes
+      Pass 2 — Deepen: fill gaps in weak sections with targeted searches
+      Pass 3 — Synthesize & Export: write report, optional verify, save files
+
+    If any phase fails, the pipeline continues with whatever data is available.
+    If we crash after Pass 1, we still return a partial report from notes.
     """
     job = _research_jobs[job_id]
+    # Intermediate state for crash recovery
+    job["notes"] = {}
+    job["sources_list"] = []
+    job["report"] = ""
 
     def push(evt_type, **kw):
         job["events"].append({"type": evt_type, **kw})
@@ -3734,39 +3739,68 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
     def is_cancelled():
         return job.get("cancelled", False)
 
-    def safe_ai_call(prompt, max_tokens=4096, timeout=90, fallback=""):
-        """Wrapper around _research_ai_call with robust error handling."""
-        try:
-            result = _research_ai_call(prompt, resolved, max_tokens=max_tokens, timeout=timeout)
-            if result and "[AI error" not in result:
-                return result
-            print(f"  [research] AI call returned error or empty: {(result or '')[:100]}")
-            return fallback
-        except Exception as e:
-            print(f"  [research] AI call exception: {e}")
-            return fallback
+    def safe_ai_call(prompt, max_tokens=4096, timeout=90, fallback="", retries=1):
+        """AI call with retry and timeout."""
+        for attempt in range(retries + 1):
+            try:
+                result = _research_ai_call(prompt, resolved, max_tokens=max_tokens, timeout=timeout)
+                if result and "[AI error" not in result:
+                    return result
+                print(f"  [research] AI call attempt {attempt+1} returned error: {(result or '')[:100]}")
+            except Exception as e:
+                print(f"  [research] AI call attempt {attempt+1} exception: {e}")
+            if attempt < retries:
+                time.sleep(2)
+        return fallback
 
-    depth_cfg = {
-        "quick":    {"sub_q": 5,  "searches_per_q": 2, "urls_per_q": 5,  "max_fetch": 15,  "detail": "concise but insightful", "analysis_words": "300-500", "report_min": 2000, "max_report_tokens": 8000},
-        "standard": {"sub_q": 8,  "searches_per_q": 3, "urls_per_q": 6,  "max_fetch": 25,  "detail": "thorough and comprehensive", "analysis_words": "400-700", "report_min": 4000, "max_report_tokens": 12000},
-        "deep":     {"sub_q": 12, "searches_per_q": 5, "urls_per_q": 8,  "max_fetch": 45,  "detail": "exhaustive, deeply analytical, and authoritative", "analysis_words": "600-1000", "report_min": 7000, "max_report_tokens": 16000},
-    }.get(depth, {"sub_q": 8, "searches_per_q": 3, "urls_per_q": 6, "max_fetch": 25, "detail": "thorough and comprehensive", "analysis_words": "400-700", "report_min": 4000, "max_report_tokens": 12000})
+    cfg = {
+        "quick":    {"sections": 4,  "scout_budget": 8,  "deepen_budget": 4,  "max_fetch": 12, "report_tokens": 8000,  "report_min": 2000, "detail": "concise but insightful"},
+        "standard": {"sections": 6,  "scout_budget": 12, "deepen_budget": 6,  "max_fetch": 20, "report_tokens": 12000, "report_min": 4000, "detail": "thorough and comprehensive"},
+        "deep":     {"sections": 8,  "scout_budget": 18, "deepen_budget": 10, "max_fetch": 35, "report_tokens": 16000, "report_min": 7000, "detail": "exhaustive, deeply analytical, and authoritative"},
+    }.get(depth, {"sections": 6, "scout_budget": 12, "deepen_budget": 6, "max_fetch": 20, "report_tokens": 12000, "report_min": 4000, "detail": "thorough and comprehensive"})
 
-    total_steps = 10
+    total_steps = 7  # Plan, Scout, Read, Deepen, Synthesize, Verify, Export
+    notes = {}           # section_title -> [bullet_notes]
+    all_sources = []     # [{title, url, snippet, section}]
+    seen_urls = set()
+    scout_used = 0
+    deepen_used = 0
+
+    def _build_partial_report():
+        """Build a best-effort report from whatever notes we have."""
+        parts = [f"# {query}\n\n*Note: This report was generated from partial data due to a pipeline interruption.*\n"]
+        for section, bullets in notes.items():
+            parts.append(f"\n## {section}\n")
+            for b in bullets:
+                parts.append(f"- {b}\n")
+        if all_sources:
+            parts.append("\n---\n\n## Sources\n\n")
+            seen = set()
+            for idx, src in enumerate(all_sources[:20], 1):
+                u = src.get("url", "")
+                if u and u not in seen:
+                    seen.add(u)
+                    parts.append(f"{idx}. [{src.get('title', 'Untitled')}]({u})\n")
+        return "".join(parts)
+
     try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         # ══════════════════════════════════════════════════════════════
-        # AGENT 1: PLANNER — Decompose query & build search strategy
+        # PHASE 1: PLANNING (timeout: 60s, retries: 1)
+        # Budget allocation across sections
         # ══════════════════════════════════════════════════════════════
-        push("progress", step="planning", pct=1, total_steps=total_steps, current_step=1,
+        push("progress", step="planning", pct=2, total_steps=total_steps, current_step=1,
              message="Planner agent analyzing topic and formulating investigation strategy...")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
+        sub_questions = []
+        search_queries = {}
+
         user_plan_text = user_plan or ""
         if user_plan_text.strip():
-            sub_questions = []
-            search_queries = {}
             angle_idx = 0
             for line in user_plan_text.split("\n"):
                 s = line.strip()
@@ -3779,53 +3813,42 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
                         search_queries[angle_idx] = [p.strip().strip('"\'') for p in parts[1:] if p.strip()]
                     sub_questions.append(sq)
                     angle_idx += 1
-            sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"] + 4]
+            sub_questions = (sub_questions or [query])[:cfg["sections"] + 2]
             push("progress", step="planning", pct=5, total_steps=total_steps, current_step=1,
                  message=f"Using your custom plan: {len(sub_questions)} investigation angles.")
         else:
             plan = safe_ai_call(
-                f"""You are a senior research strategist (Planner Agent). Deeply analyze this research topic and create a comprehensive research plan.
+                f"""You are a research strategist. Create a focused research plan.
 
-RESEARCH TOPIC: {query}
+TOPIC: {query}
 
-Think step by step:
-1. What is being asked? What are the core concepts?
-2. What domains of knowledge does this span?
-3. What are the key tensions, debates, or open questions?
-4. What would a world-class researcher investigate?
-5. What primary sources and data would be most valuable?
-6. What interdisciplinary connections exist?
+Produce exactly {cfg['sections']} investigation angles as a numbered list.
+Each angle should be a specific sub-question to research.
+After the list, for each angle, suggest 1-2 search queries.
 
-Now produce EXACTLY this output format:
+Format:
+ANGLES:
+1. <sub-question>
+2. <sub-question>
+...
 
-RESEARCH_ANGLES:
-1. <specific sub-question to investigate>
-2. <specific sub-question to investigate>
-... (exactly {depth_cfg['sub_q']} sub-questions)
-
-SEARCH_STRATEGY:
-For each angle, list 2-3 specific search queries that would find the best sources.
-Angle 1: "query1" | "query2" | "query3"
-Angle 2: "query1" | "query2" | "query3"
-... (one line per angle)
-
-KEY_TERMS:
-<comma-separated list of key technical terms, names, and concepts to watch for>""",
-                max_tokens=2000, fallback=""
+SEARCHES:
+Angle 1: "query1" | "query2"
+Angle 2: "query1" | "query2"
+...""",
+                max_tokens=1500, timeout=60, retries=1, fallback=""
             )
 
-            sub_questions = []
-            search_queries = {}
             in_angles = False
             in_strategy = False
             angle_idx = 0
             for line in (plan or "").split("\n"):
                 s = line.strip()
-                if "RESEARCH_ANGLES" in s:
+                if re.search(r"ANGLES|RESEARCH_ANGLES", s):
                     in_angles = True; in_strategy = False; continue
-                if "SEARCH_STRATEGY" in s:
+                if re.search(r"SEARCHES|SEARCH_STRATEGY", s):
                     in_angles = False; in_strategy = True; continue
-                if "KEY_TERMS" in s:
+                if re.search(r"KEY_TERMS", s):
                     in_angles = False; in_strategy = False; continue
                 if in_angles:
                     m = re.match(r"^\s*\d+[.)]\s+(.+)", s)
@@ -3834,15 +3857,18 @@ KEY_TERMS:
                 if in_strategy:
                     m = re.match(r"^\s*(?:Angle\s*)?\d+[.):]\s*(.*)", s)
                     if m and angle_idx < len(sub_questions):
-                        queries = [q.strip().strip('"').strip("'") for q in m.group(1).split("|") if q.strip()]
-                        search_queries[angle_idx] = queries[:depth_cfg["searches_per_q"]]
+                        queries = [q.strip().strip('"\'') for q in m.group(1).split("|") if q.strip()]
+                        search_queries[angle_idx] = queries[:2]
                         angle_idx += 1
 
-            sub_questions = (sub_questions or [query])[:depth_cfg["sub_q"]]
+            sub_questions = (sub_questions or [query])[:cfg["sections"]]
 
-        # Fallback: if planner produced nothing useful, use the raw query
         if not sub_questions:
             sub_questions = [query]
+
+        # Initialize notes dict
+        for sq in sub_questions:
+            notes[sq] = []
 
         push("progress", step="planning", pct=7, total_steps=total_steps, current_step=1,
              message=f"Research plan ready: {len(sub_questions)} investigation angles identified.",
@@ -3852,76 +3878,81 @@ KEY_TERMS:
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # AGENT 2: RESEARCHERS — Parallel web search & source extraction
+        # PHASE 2: SCOUTING — Budget-capped web searches
+        # Each failed search marks the section as "weak" but continues
         # ══════════════════════════════════════════════════════════════
-
-        # --- Phase 2a: Multi-query web search ---
-        all_results, seen_urls = [], set()
-        total_searches = sum(len(search_queries.get(i, [sub_questions[i]])) for i in range(len(sub_questions))) + 1
-        search_done = 0
+        push("progress", step="scouting", pct=8, total_steps=total_steps, current_step=2,
+             message=f"Scouting phase: searching with budget of {cfg['scout_budget']} queries...")
 
         for sq_idx, sq in enumerate(sub_questions):
             if is_cancelled():
                 push("cancelled"); job["status"] = "cancelled"; return
-            queries = search_queries.get(sq_idx, [sq])
+            if scout_used >= cfg["scout_budget"]:
+                break
+
+            queries = search_queries.get(sq_idx, [sq])[:2]
             if not queries:
                 queries = [sq]
+
             for search_q in queries:
-                if is_cancelled():
-                    push("cancelled"); job["status"] = "cancelled"; return
-                search_done += 1
-                pct = 7 + int((search_done / max(total_searches, 1)) * 18)
-                push("progress", step="searching", pct=min(pct, 25), total_steps=total_steps, current_step=2,
-                     message=f"Searching [{search_done}/{total_searches}]: {search_q[:75]}...")
+                if scout_used >= cfg["scout_budget"]:
+                    break
+                scout_used += 1
+                pct = 8 + int((scout_used / max(cfg["scout_budget"], 1)) * 20)
+                push("progress", step="scouting", pct=min(pct, 28), total_steps=total_steps, current_step=2,
+                     message=f"Searching [{scout_used}/{cfg['scout_budget']}]: {search_q[:65]}...")
+
                 try:
-                    for r in _ddg_search(search_q, max_results=depth_cfg["urls_per_q"]):
+                    results = _ddg_search(search_q, max_results=5)
+                    for r in results:
                         if r["url"] and r["url"] not in seen_urls:
                             seen_urls.add(r["url"])
-                            r["sub_question"] = sq
-                            r["search_query"] = search_q
-                            all_results.append(r)
+                            r["section"] = sq
+                            all_sources.append(r)
                 except Exception as e:
-                    print(f"  [research] Search failed for '{search_q[:50]}': {e}")
+                    print(f"  [research] Scout search failed for '{search_q[:50]}': {e}")
+                    # Section stays weak but pipeline continues
 
-        # Also search the main query directly
-        search_done += 1
-        push("progress", step="searching", pct=25, total_steps=total_steps, current_step=2,
-             message=f"Searching main topic: {query[:75]}...")
-        try:
-            for r in _ddg_search(query, max_results=8):
-                if r["url"] and r["url"] not in seen_urls:
-                    seen_urls.add(r["url"])
-                    r["sub_question"] = query
-                    all_results.append(r)
-        except Exception as e:
-            print(f"  [research] Main search failed: {e}")
+            # Also search main query once (first section only)
+            if sq_idx == 0:
+                try:
+                    for r in _ddg_search(query, max_results=6):
+                        if r["url"] and r["url"] not in seen_urls:
+                            seen_urls.add(r["url"])
+                            r["section"] = sq
+                            all_sources.append(r)
+                except Exception:
+                    pass
 
-        if not all_results:
-            push("progress", step="searching", pct=27, total_steps=total_steps, current_step=2,
-                 message="No search results found. Attempting broader search...")
-            # Broader fallback search
+        # Broader fallback if we found nothing
+        if not all_sources:
+            push("progress", step="scouting", pct=27, total_steps=total_steps, current_step=2,
+                 message="No results found. Attempting broader fallback search...")
             try:
                 for r in _ddg_search(query.split()[0] if query.split() else query, max_results=10):
                     if r["url"] and r["url"] not in seen_urls:
                         seen_urls.add(r["url"])
-                        r["sub_question"] = query
-                        all_results.append(r)
+                        r["section"] = sub_questions[0]
+                        all_sources.append(r)
             except Exception:
                 pass
 
-        push("progress", step="searching", pct=27, total_steps=total_steps, current_step=2,
-             message=f"Found {len(all_results)} unique sources across {search_done} searches.")
+        push("progress", step="scouting", pct=28, total_steps=total_steps, current_step=2,
+             message=f"Scouting complete: {len(all_sources)} sources found across {scout_used} searches.")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # --- Phase 2b: Parallel source content extraction ---
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        # ══════════════════════════════════════════════════════════════
+        # PHASE 3: READ & SUMMARIZE — Parallel fetch + bullet notes
+        # Each source fetch can fail independently
+        # ══════════════════════════════════════════════════════════════
+        push("progress", step="reading", pct=29, total_steps=total_steps, current_step=3,
+             message=f"Reading up to {min(len(all_sources), cfg['max_fetch'])} sources in parallel...")
+
         fetched = []
-        fetch_total = min(len(all_results), depth_cfg["max_fetch"])
-        to_fetch = all_results[:fetch_total]
-        push("progress", step="reading", pct=28, total_steps=total_steps, current_step=3,
-             message=f"Reading {fetch_total} sources in parallel...")
+        fetch_total = min(len(all_sources), cfg["max_fetch"])
+        to_fetch = all_sources[:fetch_total]
 
         def _fetch_one(result):
             if is_cancelled():
@@ -3947,320 +3978,238 @@ KEY_TERMS:
                     pass
                 done_count += 1
                 if done_count % 5 == 0 or done_count == fetch_total:
-                    pct = 27 + int((done_count / max(fetch_total, 1)) * 13)
-                    push("progress", step="reading", pct=min(pct, 40), total_steps=total_steps, current_step=3,
+                    pct = 29 + int((done_count / max(fetch_total, 1)) * 8)
+                    push("progress", step="reading", pct=min(pct, 37), total_steps=total_steps, current_step=3,
                          message=f"Read {done_count}/{fetch_total} sources ({len(fetched)} extracted)...")
 
         # Fall back to snippets if fetching yielded little
         if len(fetched) < 3:
-            for r in all_results[:20]:
+            for r in all_sources[:20]:
                 if r.get("snippet") and len(r["snippet"]) > 80:
                     fetched.append({**r, "text": r["snippet"]})
 
-        push("progress", step="reading", pct=40, total_steps=total_steps, current_step=3,
-             message=f"Successfully extracted content from {len(fetched)} sources.")
+        push("progress", step="reading", pct=38, total_steps=total_steps, current_step=3,
+             message=f"Extracted {len(fetched)} sources. Generating section notes...")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # If we still have no sources at all, generate a report from AI knowledge alone
-        if not fetched:
-            push("progress", step="reading", pct=42, total_steps=total_steps, current_step=3,
-                 message="No web sources extracted. Generating report from AI knowledge...")
+        # Group fetched by section and generate bullet-note summaries
+        section_sources = {}
+        for f in fetched:
+            sec = f.get("section", sub_questions[0])
+            section_sources.setdefault(sec, []).append(f)
 
-        # --- Phase 2c: Deep analysis per source (researcher agents) ---
-        source_analyses = []
-        analysis_total = len(fetched)
-        if analysis_total > 0:
-            # Parallel analysis for speed (up to 4 concurrent)
-            def _analyze_source(idx_src):
-                idx, src = idx_src
-                if is_cancelled():
-                    return None
-                return safe_ai_call(
-                    f"""You are a critical research analyst (Researcher Agent) performing deep analysis on a source.
-
-MAIN RESEARCH TOPIC: {query}
-SUB-QUESTION THIS SOURCE ADDRESSES: {src.get('sub_question', query)}
-SOURCE: {src.get('title','')} — {src['url']}
-
-CONTENT:
-{src['text'][:7000]}
-
-Perform deep analysis:
-
-1. RELEVANCE: How relevant is this to our research topic? (high/medium/low)
-2. KEY FINDINGS: Extract every important fact, statistic, quote, argument, and data point relevant to the research topic. Be exhaustive.
-3. CREDIBILITY: Assess the source's reliability and potential biases.
-4. UNIQUE INSIGHTS: What does this source reveal that others might not?
-5. CONNECTIONS: How does this relate to or contradict other aspects of the topic?
-6. GAPS: What questions does this raise or leave unanswered?
-
-Write {depth_cfg['analysis_words']} words of detailed analysis.""",
-                    max_tokens=1500, fallback=""
-                ), src
-
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = {pool.submit(_analyze_source, (i, src)): (i, src) for i, src in enumerate(fetched)}
-                done_a = 0
-                for future in as_completed(futures):
-                    if is_cancelled():
-                        push("cancelled"); job["status"] = "cancelled"; return
-                    try:
-                        result = future.result()
-                        if result:
-                            analysis, src = result
-                            if analysis:
-                                source_analyses.append({
-                                    "title": src.get("title", ""),
-                                    "url": src["url"],
-                                    "snippet": src.get("snippet", ""),
-                                    "sub_question": src.get("sub_question", ""),
-                                    "analysis": analysis,
-                                })
-                    except Exception as e:
-                        print(f"  [research] Analysis future error: {e}")
-                    done_a += 1
-                    pct = 40 + int((done_a / max(analysis_total, 1)) * 16)
-                    push("progress", step="analyzing", pct=min(pct, 56), total_steps=total_steps, current_step=4,
-                         message=f"Deep analyzing [{done_a}/{analysis_total}] — {len(source_analyses)} analyzed...")
-
-        push("progress", step="analyzing", pct=56, total_steps=total_steps, current_step=4,
-             message=f"Deep analysis complete: {len(source_analyses)} sources thoroughly analyzed.")
-
-        if is_cancelled():
-            push("cancelled"); job["status"] = "cancelled"; return
-
-        # ══════════════════════════════════════════════════════════════
-        # AGENT 2 (cont): Gap Analysis & Supplemental Search
-        # ══════════════════════════════════════════════════════════════
-        push("progress", step="gap-analysis", pct=57, total_steps=total_steps, current_step=5,
-             message="Identifying knowledge gaps and searching for missing information...")
-
-        analyses_block = "\n\n".join(
-            f"### Source {i+1}: {s['title']}\nURL: {s['url']}\nSub-question: {s['sub_question']}\n{s['analysis']}"
-            for i, s in enumerate(source_analyses)
-        )
-
-        if source_analyses:
-            gap_result = safe_ai_call(
-                f"""You are a research quality analyst. Review everything we've found so far and identify CRITICAL GAPS.
-
-RESEARCH TOPIC: {query}
-INVESTIGATION ANGLES: {'; '.join(sub_questions)}
-
-SOURCE ANALYSES SO FAR:
-{analyses_block[:16000]}
-
-Identify:
-1. Which investigation angles have WEAK or NO coverage from our sources?
-2. What critical facts, statistics, or perspectives are MISSING?
-3. What specific additional searches would fill these gaps?
-
-Output EXACTLY:
-GAP_SEARCHES:
-1. "<specific search query to fill gap 1>"
-2. "<specific search query to fill gap 2>"
-3. "<specific search query to fill gap 3>"
-(list 2-5 gap-filling searches, or "NONE" if coverage is sufficient)""",
-                max_tokens=800, fallback=""
+        def _summarize_section(sq, sources_for_section):
+            if not sources_for_section or is_cancelled():
+                return sq, []
+            source_text = "\n\n".join(
+                f"Source: {s.get('title','Untitled')} ({s['url']})\n{s['text'][:4000]}"
+                for s in sources_for_section[:6]
             )
+            summary = safe_ai_call(
+                f"""Extract key facts from these sources about: {sq}
 
-            gap_searches = []
-            for line in (gap_result or "").split("\n"):
-                m = re.match(r'^\s*\d+[.)]\s*"?([^"]+)"?\s*$', line.strip())
-                if m and m.group(1).strip().upper() != "NONE":
-                    gap_searches.append(m.group(1).strip())
+{source_text[:12000]}
 
-            if gap_searches and not is_cancelled():
-                for gi, gsq in enumerate(gap_searches[:4]):
-                    if is_cancelled():
+List the most important facts, statistics, data points, quotes, and insights as bullet points.
+Be exhaustive but concise. Each bullet should be one key fact or finding.""",
+                max_tokens=1000, timeout=60, retries=1, fallback=""
+            )
+            bullets = [line.strip().lstrip("\u2022-* ") for line in (summary or "").split("\n")
+                       if line.strip() and len(line.strip()) > 10 and not line.strip().startswith("#")]
+            return sq, bullets
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_summarize_section, sq, section_sources.get(sq, [])): sq
+                       for sq in sub_questions}
+            done_s = 0
+            for future in as_completed(futures):
+                if is_cancelled():
+                    push("cancelled"); job["status"] = "cancelled"; return
+                try:
+                    sq, bullets = future.result()
+                    notes[sq] = bullets
+                except Exception as e:
+                    print(f"  [research] Section summary failed (non-fatal): {e}")
+                done_s += 1
+                pct = 38 + int((done_s / max(len(sub_questions), 1)) * 12)
+                push("progress", step="reading", pct=min(pct, 50), total_steps=total_steps, current_step=3,
+                     message=f"Summarized {done_s}/{len(sub_questions)} sections...")
+
+        # Checkpoint: scouting notes saved
+        total_notes = sum(len(v) for v in notes.values())
+        push("progress", step="reading", pct=50, total_steps=total_steps, current_step=3,
+             message=f"Scouting complete: {total_notes} notes across {len(notes)} sections.")
+        job["notes"] = dict(notes)
+        job["sources_list"] = list(all_sources)
+
+        if is_cancelled():
+            push("cancelled"); job["status"] = "cancelled"; return
+
+        # ══════════════════════════════════════════════════════════════
+        # PHASE 4: DEEPENING — Fill gaps in weak sections
+        # Only runs for sections with < 3 notes; budget-capped
+        # Each gap search can fail independently
+        # ══════════════════════════════════════════════════════════════
+        weak_sections = [sq for sq in sub_questions if len(notes.get(sq, [])) < 3]
+
+        if weak_sections and cfg["deepen_budget"] > 0:
+            push("progress", step="deepening", pct=51, total_steps=total_steps, current_step=4,
+                 message=f"Deepening: {len(weak_sections)} sections need more data (budget: {cfg['deepen_budget']})...")
+
+            deepen_per = max(1, cfg["deepen_budget"] // len(weak_sections))
+
+            for sq in weak_sections:
+                if is_cancelled():
+                    push("cancelled"); job["status"] = "cancelled"; return
+                if deepen_used >= cfg["deepen_budget"]:
+                    break
+
+                # AI suggests targeted gap-filling queries
+                gap_queries_raw = safe_ai_call(
+                    f"""I'm researching: {query}
+Specifically the sub-topic: {sq}
+Current notes are thin. Suggest 1-{deepen_per} specific search queries to find better sources.
+Output one query per line, nothing else.""",
+                    max_tokens=200, timeout=30, retries=0, fallback=sq
+                )
+
+                gap_queries = [line.strip().strip('"') for line in (gap_queries_raw or sq).split("\n")
+                               if line.strip() and len(line.strip()) > 5][:deepen_per]
+                if not gap_queries:
+                    gap_queries = [sq]
+
+                for gq in gap_queries:
+                    if deepen_used >= cfg["deepen_budget"]:
                         break
-                    push("progress", step="gap-analysis", pct=57 + int(((gi+1)/len(gap_searches[:4]))*5),
-                         total_steps=total_steps, current_step=5,
-                         message=f"Gap search [{gi+1}/{len(gap_searches[:4])}]: {gsq[:65]}...")
+                    deepen_used += 1
+                    pct = 51 + int((deepen_used / max(cfg["deepen_budget"], 1)) * 9)
+                    push("progress", step="deepening", pct=min(pct, 60), total_steps=total_steps, current_step=4,
+                         message=f"Gap search [{deepen_used}/{cfg['deepen_budget']}]: {gq[:60]}...")
+
                     try:
-                        for r in _ddg_search(gsq, max_results=5):
+                        results = _ddg_search(gq, max_results=4)
+                        for r in results:
                             if r["url"] and r["url"] not in seen_urls:
                                 seen_urls.add(r["url"])
                                 text = _fetch_url_text(r["url"])
                                 if text and len(text) > 150:
-                                    analysis = safe_ai_call(
-                                        f"""Quickly extract key facts from this source relevant to: {query}
-SOURCE: {r.get('title','')} — {r['url']}
-CONTENT: {text[:5000]}
-
-List the most important facts, data points, and insights. Be concise but thorough.""",
-                                        max_tokens=600, fallback=""
+                                    summary = safe_ai_call(
+                                        f"Extract key facts about '{sq}' from this source:\n\n{text[:5000]}\n\nList bullet points only.",
+                                        max_tokens=500, timeout=30, retries=0, fallback=""
                                     )
-                                    if analysis:
-                                        source_analyses.append({
-                                            "title": r.get("title", ""),
-                                            "url": r["url"],
-                                            "snippet": r.get("snippet", ""),
-                                            "sub_question": gsq,
-                                            "analysis": analysis,
-                                        })
+                                    new_bullets = [line.strip().lstrip("\u2022-* ") for line in (summary or "").split("\n")
+                                                   if line.strip() and len(line.strip()) > 10 and not line.strip().startswith("#")]
+                                    notes[sq].extend(new_bullets)
+                                    all_sources.append({**r, "section": sq})
                     except Exception as e:
-                        print(f"  [research] Gap search failed for '{gsq[:50]}': {e}")
+                        print(f"  [research] Deepen search failed for '{gq[:50]}' (non-fatal): {e}")
 
-        push("progress", step="gap-analysis", pct=63, total_steps=total_steps, current_step=5,
-             message=f"Gap analysis complete. Total sources: {len(source_analyses)}.")
+            push("progress", step="deepening", pct=60, total_steps=total_steps, current_step=4,
+                 message=f"Deepening complete. {sum(len(v) for v in notes.values())} total notes.")
+        else:
+            push("progress", step="deepening", pct=60, total_steps=total_steps, current_step=4,
+                 message="All sections have sufficient data. Skipping deepening pass.")
+
+        # Checkpoint: deepened notes
+        job["notes"] = dict(notes)
+        job["sources_list"] = list(all_sources)
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
-
-        # Rebuild analyses block with supplemental sources
-        analyses_block = "\n\n".join(
-            f"### Source {i+1}: {s['title']}\nURL: {s['url']}\nSub-question: {s['sub_question']}\n{s['analysis']}"
-            for i, s in enumerate(source_analyses)
-        )
 
         # ══════════════════════════════════════════════════════════════
-        # AGENT 3: SYNTHESIZER — Cross-reference & write report
+        # PHASE 5: SYNTHESIS — Generate report from notes
+        # Multi-pass writing (core → enhance → polish)
+        # If synthesis fails, fall back to partial report from notes
         # ══════════════════════════════════════════════════════════════
-        push("progress", step="cross-referencing", pct=64, total_steps=total_steps, current_step=6,
-             message="Synthesizer agent cross-referencing findings and identifying patterns...")
+        push("progress", step="synthesizing", pct=61, total_steps=total_steps, current_step=5,
+             message="Synthesizing findings into comprehensive report (pass 1: core content)...")
 
-        if is_cancelled():
-            push("cancelled"); job["status"] = "cancelled"; return
-
-        cross_ref = safe_ai_call(
-            f"""You are a Synthesizer Agent. Deeply analyze ALL source analyses below and produce a synthesis framework.
-
-RESEARCH TOPIC: {query}
-
-SOURCE ANALYSES:
-{analyses_block[:24000]}
-
-Produce:
-
-1. CONSENSUS FINDINGS: What do multiple sources agree on? List specific facts/claims supported by 2+ sources.
-2. CONTRADICTIONS: Where do sources disagree? What are the competing viewpoints?
-3. KEY THEMES: What are the 5-8 major themes that emerge across all sources?
-4. EVIDENCE STRENGTH: Which findings have the strongest evidence? Which are speculative?
-5. NARRATIVE ARC: What story do these findings tell when woven together?
-6. SURPRISING DISCOVERIES: Any unexpected findings that challenge conventional wisdom?
-7. REPORT OUTLINE: Create a detailed section-by-section outline for the final report, with bullet points of what should go in each section.
-
-Be thorough and analytical.""",
-            max_tokens=4000, fallback=""
+        # Build notes context for the AI
+        notes_context = "\n\n".join(
+            f"### {section}\n" + "\n".join(f"- {b}" for b in bullets)
+            for section, bullets in notes.items() if bullets
         )
 
-        push("progress", step="cross-referencing", pct=70, total_steps=total_steps, current_step=6,
-             message="Cross-referencing complete. Preparing report structure...")
+        sources_context = "\n".join(
+            f"- {s.get('title','Untitled')} ({s.get('url','')}): {s.get('snippet','')[:150]}"
+            for s in all_sources[:30]
+        )
 
-        if is_cancelled():
-            push("cancelled"); job["status"] = "cancelled"; return
-
-        # --- Synthesizer: Multi-pass report writing ---
-        push("progress", step="writing", pct=71, total_steps=total_steps, current_step=7,
-             message="Synthesizer agent writing comprehensive research report (pass 1: core content)...")
-
-        if is_cancelled():
-            push("cancelled"); job["status"] = "cancelled"; return
-
-        # Build source context string — use cross-ref if available, else raw analyses
-        synthesis_ctx = cross_ref[:8000] if cross_ref else "No cross-reference synthesis available."
-        source_ctx = analyses_block[:20000] if analyses_block else "No detailed source analyses available."
+        if not notes_context.strip() and not all_sources:
+            push("progress", step="synthesizing", pct=62, total_steps=total_steps, current_step=5,
+                 message="No web sources found. Generating report from AI knowledge...")
 
         report_md = safe_ai_call(
-            f"""You are an expert Synthesizer Agent producing a {depth_cfg['detail']} research report.
+            f"""You are an expert research synthesizer producing a {cfg['detail']} report.
 
 TOPIC: {query}
 
-SYNTHESIS FRAMEWORK:
-{synthesis_ctx}
+RESEARCH NOTES (organized by section):
+{notes_context[:20000]}
 
-SOURCE ANALYSES:
-{source_ctx}
+SOURCES FOUND:
+{sources_context[:4000]}
 
-Write a {depth_cfg['detail']} research report. Requirements:
-
-STRUCTURE (use markdown headers):
+Write a {cfg['detail']} research report. Structure (use markdown headers):
 # {query}
 ## Executive Summary
-(250-400 words synthesizing the most important findings, conclusions, and implications)
-
+(250-400 words)
 ## Key Takeaways
-(Bullet list of 5-8 most important takeaways)
-
+(5-8 bullet points)
 ## Background & Context
-(Set the stage — why this topic matters, historical context, scope of the issue)
-
 ## Key Findings
 ### [Finding 1 Title]
-(Detailed analysis with evidence from sources)
 ### [Finding 2 Title]
-(Continue for each major finding...)
-
-## Detailed Analysis
-### [Major Aspect 1]
-(Deep dive with cross-referenced evidence)
-### [Major Aspect 2]
-(Continue...)
-
+(continue for each major finding)
 ## Current Landscape & Trends
-(What's happening now, where things are headed)
-
 ## Competing Perspectives
-(Different viewpoints, debates, and controversies)
-
 ## Implications & Impact
-(What this means for stakeholders, practical consequences)
-
 ## Recommendations
-(Actionable recommendations based on findings)
-
 ## Conclusion
-(Final synthesis and forward-looking statement)
 
-QUALITY REQUIREMENTS:
-- Minimum {depth_cfg['report_min']} words
-- Cite specific facts, statistics, and data points from sources
-- Use **bold** for key terms and important findings
-- Use bullet lists and numbered lists for clarity
-- Include specific examples and case studies where available
-- Be analytical and insightful, not just descriptive — explain WHY things matter
-- Draw connections between different findings
-- Address limitations and gaps in the available information
-- Every major claim should reference evidence from the sources""",
-            max_tokens=depth_cfg["max_report_tokens"],
-            fallback=f"# Research Report: {query}\n\n*Report generation encountered an issue. Sources analyzed below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses)
+REQUIREMENTS:
+- Minimum {cfg['report_min']} words
+- Cite specific facts and data from the research notes
+- Use **bold** for key terms
+- Use bullet/numbered lists for clarity
+- Be analytical and insightful — explain WHY things matter
+- Draw connections between different findings""",
+            max_tokens=cfg["report_tokens"], timeout=120, retries=1,
+            fallback=""
         )
 
-        if not report_md:
-            report_md = f"# Research Report: {query}\n\n*Error generating report. Sources analyzed below.*\n\n" + "".join(f"- [{s['title']}]({s['url']})\n" for s in source_analyses)
+        if not report_md or len(report_md) < 200:
+            report_md = _build_partial_report()
+
+        push("progress", step="synthesizing", pct=75, total_steps=total_steps, current_step=5,
+             message="Core report generated.")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # Pass 2: Enhancement (for standard and deep)
-        if depth in ("standard", "deep") and report_md and "Error generating report" not in report_md:
-            push("progress", step="writing", pct=80, total_steps=total_steps, current_step=7,
+        # Enhancement pass (standard/deep) — can fail gracefully
+        if depth in ("standard", "deep") and "partial data" not in report_md:
+            push("progress", step="synthesizing", pct=76, total_steps=total_steps, current_step=5,
                  message="Enhancing report (pass 2: depth and polish)...")
             enhanced = safe_ai_call(
-                f"""You are a senior editor (Synthesizer Agent, pass 2) reviewing and enhancing a research report.
+                f"""You are a senior editor enhancing a research report. Improve it by:
+1. Adding more specific data points and evidence where thin
+2. Strengthening the executive summary
+3. Improving transitions between sections
+4. Making recommendations concrete and actionable
+5. Ensuring every section has sufficient depth
 
-ORIGINAL REPORT:
+Output the COMPLETE enhanced report in markdown. Do not truncate.
+
+REPORT:
 {report_md[:20000]}
 
-ADDITIONAL SOURCE DATA (use to add missing details):
-{analyses_block[:10000]}
-
-ENHANCEMENT INSTRUCTIONS:
-1. Add more specific data points, statistics, and evidence where sections feel thin
-2. Strengthen the executive summary to be more impactful
-3. Add transitional sentences between sections for better flow
-4. Ensure every section has sufficient depth (no section should be less than 150 words)
-5. Make sure the Key Takeaways are punchy and memorable
-6. Make sure the Recommendations section is concrete and actionable
-7. Improve the conclusion to be memorable and forward-looking
-8. Fix any logical gaps or unsupported claims
-9. Add relevant comparisons, analogies, or frameworks that make the content more accessible
-
-Output the COMPLETE enhanced report in markdown. Do not truncate or abbreviate — write the full report.""",
-                max_tokens=depth_cfg["max_report_tokens"], fallback=""
+ADDITIONAL RESEARCH NOTES:
+{notes_context[:10000]}""",
+                max_tokens=cfg["report_tokens"], timeout=120, retries=0, fallback=""
             )
             if enhanced and len(enhanced) > len(report_md) * 0.7:
                 report_md = enhanced
@@ -4268,155 +4217,139 @@ Output the COMPLETE enhanced report in markdown. Do not truncate or abbreviate �
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # Pass 3: Deep polish for deep mode
-        if depth == "deep" and report_md and "Error generating report" not in report_md:
-            push("progress", step="writing", pct=84, total_steps=total_steps, current_step=7,
-                 message="Final polish pass (pass 3: expert review)...")
+        # Deep polish pass — can fail gracefully
+        if depth == "deep" and "partial data" not in report_md:
+            push("progress", step="synthesizing", pct=80, total_steps=total_steps, current_step=5,
+                 message="Final polish (pass 3: expert review)...")
             polished = safe_ai_call(
-                f"""You are a world-class editor doing a final polish on a research report. Focus on:
-1. Ensure no section feels rushed or superficial
+                f"""Final editorial polish on this research report. Focus on:
+1. No section feels rushed or superficial
 2. Add nuance where claims are too absolute
-3. Ensure the narrative flows logically from start to finish
-4. Check that evidence properly supports all major claims
-5. Add a "Future Outlook" subsection before the Conclusion if one doesn't exist
-6. Make the writing style engaging and authoritative
+3. Narrative flows logically start to finish
+4. Evidence properly supports all major claims
+5. Add a "Future Outlook" subsection before Conclusion if absent
+6. Make writing engaging and authoritative
+
+Output the COMPLETE polished report. Do not truncate.
 
 REPORT:
-{report_md[:22000]}
-
-Output the COMPLETE polished report. Do not truncate.""",
-                max_tokens=depth_cfg["max_report_tokens"], fallback=""
+{report_md[:22000]}""",
+                max_tokens=cfg["report_tokens"], timeout=120, retries=0, fallback=""
             )
             if polished and len(polished) > len(report_md) * 0.7:
                 report_md = polished
 
-        push("progress", step="writing", pct=87, total_steps=total_steps, current_step=7,
-             message="Report writing complete.")
+        push("progress", step="synthesizing", pct=85, total_steps=total_steps, current_step=5,
+             message="Report synthesis complete.")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # AGENT 4: VERIFIER — Fact-check & quality review
+        # PHASE 6: VERIFY — Optional fact-check (can fail gracefully)
+        # If this phase fails entirely, the report is still usable
         # ══════════════════════════════════════════════════════════════
-        push("progress", step="reviewing", pct=88, total_steps=total_steps, current_step=8,
-             message="Verifier agent running fact-check and quality review...")
+        push("progress", step="verifying", pct=86, total_steps=total_steps, current_step=6,
+             message="Running quick verification pass...")
 
-        quality_check = safe_ai_call(
-            f"""You are a Verifier Agent. Review this research report for quality and accuracy.
-
-REPORT:
-{report_md[:16000]}
-
-SOURCE DATA (to verify claims against):
-{analyses_block[:8000]}
-
-Check for:
-1. Any unsupported or potentially inaccurate claims — flag them
-2. Internal contradictions between sections
-3. Missing important perspectives that sources covered
-4. Sections that need more evidence
-5. Claims that contradict the source data
-
-If you find critical issues that need fixing, list specific corrections.
-If the report is solid, say "QUALITY: PASS".
-
-Then provide a one-paragraph "Research Limitations" section that should be appended to the report.""",
-            max_tokens=1500, fallback="QUALITY: PASS"
-        )
-
-        # If verifier found critical issues, attempt targeted fix
-        if quality_check and "QUALITY: PASS" not in quality_check and "specific corrections" not in quality_check.lower():
-            # Extract corrections and apply them
-            corrections_text = quality_check.split("Research Limitations")[0] if "Research Limitations" in quality_check else quality_check
-            if len(corrections_text.strip()) > 50 and "Error generating report" not in report_md:
-                push("progress", step="reviewing", pct=90, total_steps=total_steps, current_step=8,
-                     message="Verifier found issues — applying corrections...")
-                fixed = safe_ai_call(
-                    f"""Apply these corrections to the research report. Output the COMPLETE corrected report.
-
-CORRECTIONS:
-{corrections_text[:3000]}
+        try:
+            quality_check = safe_ai_call(
+                f"""Quick quality review of this research report.
+Check for: unsupported claims, contradictions, missing perspectives.
+If issues found, list specific corrections. Otherwise say "QUALITY: PASS".
+Also provide a one-paragraph "Research Limitations" section.
 
 REPORT:
-{report_md[:20000]}
+{report_md[:16000]}""",
+                max_tokens=1000, timeout=60, retries=0, fallback="QUALITY: PASS"
+            )
 
-Fix ONLY the specific issues raised. Do not rewrite sections that are fine. Output the COMPLETE report.""",
-                    max_tokens=depth_cfg["max_report_tokens"], fallback=""
-                )
-                if fixed and len(fixed) > len(report_md) * 0.7:
-                    report_md = fixed
+            if quality_check and "QUALITY: PASS" not in quality_check:
+                corrections = quality_check.split("Research Limitations")[0] if "Research Limitations" in quality_check else quality_check
+                if len(corrections.strip()) > 50 and "partial data" not in report_md:
+                    push("progress", step="verifying", pct=89, total_steps=total_steps, current_step=6,
+                         message="Verifier found issues — applying corrections...")
+                    fixed = safe_ai_call(
+                        f"Apply these corrections. Output the COMPLETE corrected report.\n\nCORRECTIONS:\n{corrections[:3000]}\n\nREPORT:\n{report_md[:20000]}",
+                        max_tokens=cfg["report_tokens"], timeout=90, retries=0, fallback=""
+                    )
+                    if fixed and len(fixed) > len(report_md) * 0.7:
+                        report_md = fixed
 
-        # Append limitations if provided
-        if quality_check and "Research Limitations" in quality_check:
-            lim_start = quality_check.find("Research Limitations")
-            limitations = quality_check[lim_start:]
-            if not report_md.rstrip().endswith("---"):
-                report_md += "\n\n---\n\n"
-            report_md += f"## {limitations}"
+            if quality_check and "Research Limitations" in quality_check:
+                lim_start = quality_check.find("Research Limitations")
+                limitations = quality_check[lim_start:]
+                if not report_md.rstrip().endswith("---"):
+                    report_md += "\n\n---\n\n"
+                report_md += f"## {limitations}"
 
-        push("progress", step="reviewing", pct=92, total_steps=total_steps, current_step=8,
-             message="Quality review complete.")
+        except Exception as e:
+            print(f"  [research] Verify phase failed (non-fatal): {e}")
+            push("progress", step="verifying", pct=90, total_steps=total_steps, current_step=6,
+                 message=f"Verification skipped due to error. Proceeding to export.")
+
+        push("progress", step="verifying", pct=91, total_steps=total_steps, current_step=6,
+             message="Verification complete.")
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
         # ══════════════════════════════════════════════════════════════
-        # STEP 9: Source Attribution
+        # PHASE 7: EXPORT — Save markdown (always), try PDF (can fail)
+        # Source citations added here
         # ══════════════════════════════════════════════════════════════
-        push("progress", step="citing", pct=93, total_steps=total_steps, current_step=9,
-             message="Compiling source attributions...")
+        push("progress", step="exporting", pct=93, total_steps=total_steps, current_step=7,
+             message="Compiling sources and exporting files...")
 
-        if source_analyses:
+        # De-duplicate and build source list
+        source_list = []
+        seen_src_urls = set()
+        for s in all_sources:
+            u = s.get("url", "")
+            if u and u not in seen_src_urls:
+                seen_src_urls.add(u)
+                source_list.append({"title": s.get("title", "Untitled"), "url": u, "snippet": s.get("snippet", "")})
+
+        # Append source citations to report
+        if source_list:
             report_md += "\n\n---\n\n## Sources & References\n\n"
-            for idx, src in enumerate(source_analyses, 1):
-                report_md += f"{idx}. [{src['title'] or 'Untitled'}]({src['url']})\n"
-
-        push("progress", step="citing", pct=95, total_steps=total_steps, current_step=9,
-             message="Source citations added.")
-
-        if is_cancelled():
-            push("cancelled"); job["status"] = "cancelled"; return
-
-        # ══════════════════════════════════════════════════════════════
-        # STEP 10: PDF & File Export
-        # ══════════════════════════════════════════════════════════════
-        push("progress", step="exporting", pct=96, total_steps=total_steps, current_step=10,
-             message="Generating PDF and Markdown reports...")
+            for idx, src in enumerate(source_list, 1):
+                report_md += f"{idx}. [{src['title']}]({src['url']})\n"
 
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_q = re.sub(r"[^\w\s-]", "", query[:40]).strip().replace(" ", "_")
+        md_fn = f"research_{safe_q}_{ts}.md"
         pdf_fn = f"research_{safe_q}_{ts}.pdf"
-        md_fn  = f"research_{safe_q}_{ts}.md"
-        rdir   = WORKSPACE / "notes" / "research"
+        rdir = WORKSPACE / "notes" / "research"
         rdir.mkdir(parents=True, exist_ok=True)
+
+        # Markdown — always save
         try:
-            (rdir / md_fn).write_text(
-                f"# {query}\n\n{report_md}",
-                encoding="utf-8"
-            )
+            (rdir / md_fn).write_text(report_md, encoding="utf-8")
         except Exception as md_err:
             print(f"  [research] Markdown save failed: {md_err}")
 
+        # PDF — try but don't crash if it fails
         pdf_ok = False
         try:
-            _generate_research_pdf(query, report_md, source_analyses, rdir / pdf_fn)
+            _generate_research_pdf(query, report_md, source_list, rdir / pdf_fn)
             pdf_ok = True
         except Exception as pdf_err:
-            print(f"  [research] PDF generation failed: {pdf_err}")
-            push("progress", step="exporting", pct=98, total_steps=total_steps, current_step=10,
-                 message=f"PDF note: {pdf_err} — markdown saved.")
+            print(f"  [research] PDF generation failed (non-fatal): {pdf_err}")
+            push("progress", step="exporting", pct=97, total_steps=total_steps, current_step=7,
+                 message=f"PDF skipped: {str(pdf_err)[:80]}. Markdown saved successfully.")
 
-        push("progress", step="exporting", pct=100, total_steps=total_steps, current_step=10,
-             message="All files generated successfully.")
+        push("progress", step="exporting", pct=100, total_steps=total_steps, current_step=7,
+             message="Export complete!")
 
+        job["report"] = report_md
         push("done",
              report=report_md,
              pdf_file=pdf_fn if pdf_ok else None,
              md_file=md_fn,
-             sources=[{"title": s["title"], "url": s["url"], "snippet": s["snippet"]} for s in source_analyses],
+             sources=source_list,
              sub_questions=sub_questions,
-             source_count=len(source_analyses),
+             source_count=len(source_list),
         )
         job["status"] = "done"
 
@@ -4424,8 +4357,35 @@ Fix ONLY the specific issues raised. Do not rewrite sections that are fine. Outp
         import traceback
         tb = traceback.format_exc()
         print(f"  [research] Pipeline crashed: {e}\n{tb}")
-        push("error", error=f"Research failed: {e}")
-        job["status"] = "error"
+
+        # Crash recovery: try to return a partial report from notes
+        if notes and any(v for v in notes.values()):
+            partial = _build_partial_report()
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_q = re.sub(r"[^\w\s-]", "", query[:40]).strip().replace(" ", "_")
+            md_fn = f"research_{safe_q}_{ts}_partial.md"
+            rdir = WORKSPACE / "notes" / "research"
+            rdir.mkdir(parents=True, exist_ok=True)
+            try:
+                (rdir / md_fn).write_text(partial, encoding="utf-8")
+            except Exception:
+                pass
+
+            push("done",
+                 report=partial,
+                 partial=True,
+                 pdf_file=None,
+                 md_file=md_fn,
+                 sources=[{"title": s.get("title", ""), "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                          for s in all_sources[:20]],
+                 sub_questions=list(notes.keys()),
+                 source_count=len(all_sources),
+                 error_note=f"Research completed partially due to error: {str(e)[:200]}"
+            )
+            job["status"] = "done"
+        else:
+            push("error", error=f"Research failed: {str(e)[:200]}")
+            job["status"] = "error"
 
 
 @app.route("/api/research/plan", methods=["POST"])
@@ -4441,10 +4401,10 @@ def research_plan():
         depth = "standard"
 
     depth_cfg = {
-        "quick":    {"sub_q": 5},
-        "standard": {"sub_q": 8},
-        "deep":     {"sub_q": 12},
-    }.get(depth, {"sub_q": 8})
+        "quick":    {"sub_q": 4},
+        "standard": {"sub_q": 6},
+        "deep":     {"sub_q": 8},
+    }.get(depth, {"sub_q": 6})
 
     settings = load_settings()
     available_model = None
@@ -4600,6 +4560,86 @@ def start_research():
 def download_research_file(filename):
     safe_fn = re.sub(r"[^\w.\-]", "", Path(filename).name)
     return send_from_directory(str(WORKSPACE / "notes" / "research"), safe_fn, as_attachment=True)
+
+
+# ─── Post-Processing Endpoints (separate from research pipeline) ──────────────
+
+@app.route("/api/research/export/pdf", methods=["POST"])
+@require_auth_or_guest
+def research_export_pdf():
+    """Generate PDF from an existing research report (separate from main pipeline)."""
+    d = request.get_json() or {}
+    report = (d.get("report") or "").strip()
+    title = (d.get("title") or "Research Report").strip()
+    sources = d.get("sources") or []
+    if not report:
+        return jsonify({"error": "No report content provided."}), 400
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_q = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
+    pdf_fn = f"research_{safe_q}_{ts}.pdf"
+    rdir = WORKSPACE / "notes" / "research"
+    rdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        _generate_research_pdf(title, report, sources, rdir / pdf_fn)
+        return jsonify({"ok": True, "pdf_file": pdf_fn})
+    except Exception as e:
+        return jsonify({"error": f"PDF generation failed: {str(e)[:200]}"}), 500
+
+
+@app.route("/api/research/export/mindmap", methods=["POST"])
+@require_auth_or_guest
+def research_export_mindmap():
+    """Generate mind map JSON from a research report."""
+    d = request.get_json() or {}
+    report = (d.get("report") or "").strip()
+    if not report:
+        return jsonify({"error": "No report content provided."}), 400
+
+    settings = load_settings()
+    available_model = None
+    for mid in ("gemini-2.5-flash", "gemini-2.5-pro"):
+        mi = MODELS.get(mid, {})
+        if not mi:
+            continue
+        api_key, _ = resolve_provider_key(settings, mi.get("provider", "google"))
+        if api_key:
+            available_model = mid
+            break
+    if not available_model:
+        available_model = DEFAULT_MODEL
+    resolved = {
+        "provider": MODELS[available_model]["provider"],
+        "actual_model": available_model,
+        "api_key": resolve_provider_key(settings, MODELS[available_model]["provider"])[0],
+        "base_url": None,
+    }
+    if not resolved["api_key"]:
+        return jsonify({"error": "No AI API key configured."}), 400
+
+    mindmap_raw = _research_ai_call(
+        f"""Analyze this research report and create a mind map structure.
+Return ONLY valid JSON (no markdown, no code fences) with this exact format:
+{{"title": "Main Topic", "children": [{{"title": "Subtopic 1", "children": [{{"title": "Detail 1"}}, {{"title": "Detail 2"}}]}}, {{"title": "Subtopic 2", "children": [...]}}]}}
+
+Keep it to 3-4 levels deep max. Each node title should be concise (under 60 chars).
+
+REPORT:
+{report[:12000]}""",
+        resolved, max_tokens=3000, timeout=60
+    )
+
+    # Parse JSON from response (strip markdown fences if present)
+    cleaned = (mindmap_raw or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```\w*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned)
+    try:
+        data = json.loads(cleaned)
+        return jsonify({"ok": True, "mindmap": data})
+    except (json.JSONDecodeError, TypeError):
+        return jsonify({"error": "Failed to generate mind map structure."}), 500
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
