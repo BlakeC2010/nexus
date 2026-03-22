@@ -868,6 +868,15 @@ print('Hello world')
 <<<END_CODE>>>
 The code runs server-side and the output is shown to the user. Use print() for visible output. You can use multiple CODE_EXECUTE blocks per response. Available: all Python standard library modules (math, json, csv, datetime, random, collections, itertools, re, statistics, os, sys, etc.) PLUS installed packages: requests, beautifulsoup4, fpdf2, lxml, Pillow (from PIL import Image, ImageDraw, etc.), numpy, matplotlib (use 'Agg' backend: import matplotlib; matplotlib.use('Agg')). You can also pip install additional packages at the start of your code: import subprocess; subprocess.check_call(['pip', 'install', '-q', 'package_name']). 30-second timeout. USE THIS PROACTIVELY — don't just show code and tell the user to run it. If you write code, EXECUTE it.
 When generating files (images, PDFs, etc.), save them to the current working directory. The system will automatically detect new files and display them to the user with download links (images are shown inline).
+
+CRITICAL CODE EXECUTION RULES:
+- ALWAYS use print() to log EVERY meaningful result — even when generating files. If you create an image, print what you created: print(f"Created {{filename}} ({{width}}x{{height}})")
+- ALWAYS print a summary of what the code produced — users see the print output as the execution result
+- When saving files, use descriptive filenames (e.g. 'random_corners.png', 'sales_report.pdf') — not generic names like 'output.png'
+- After each <<<END_CODE>>> block, write a brief sentence describing the result. The system auto-detects generated files and displays them with download links and inline previews for images — but YOU should still describe what was created in your text.
+- Your code runs in the workspace directory. Files you save there are immediately available for download and preview.
+- If your code errors, the error output is shown to the user. Fix and re-execute if needed using another CODE_EXECUTE block.
+- COMMON SENSE: if someone asks you to create an image, PDF, chart, etc. — just DO it with code execution. Don't explain how you would do it, just execute the code and produce the file.
 10. IMAGE SEARCH — you have a real image search engine that finds and displays images inline in your response. To use it, include this tag WHERE you want the images to appear:
 <<<IMAGE_SEARCH: descriptive search query>>>
 
@@ -1195,7 +1204,7 @@ def execute_code_blocks(text):
     """Extract <<<CODE_EXECUTE: lang>>>...<<<END_CODE>>> blocks, execute them, and return results.
     Also detects files created/modified by the code and includes them in results."""
     import subprocess, tempfile, os
-    pattern = r'<<<CODE_EXECUTE:\s*(\w+)>>>\n(.*?)<<<END_CODE>>>'
+    pattern = r'<<<CODE_EXECUTE:\s*(\w+)>>>\r?\n(.*?)<<<END_CODE>>>'
     results = []
     # Protected dirs/files that code shouldn't claim credit for
     _ignore_dirs = {'.git', '__pycache__', '.venv', 'static', 'node_modules'}
@@ -1488,14 +1497,19 @@ def _build_tool_instructions(active_tools):
         ),
         "code": (
             "[TOOL ACTIVE: CODE EXECUTION]\n"
-            "The user has activated the Code Execution tool. You can now run Python code and show the output. "
+            "The user has activated the Code Execution tool. You MUST run Python code and show results. "
             "When computation, data processing, math, generating files, or any task that benefits from running actual code is involved, "
             "write executable Python code inside the special execution block:\n"
             "<<<CODE_EXECUTE: python>>>\n"
             "print('Hello world')\n"
             "<<<END_CODE>>>\n"
             "The code will be executed server-side and the output shown to the user. "
-            "Always use print() to produce output the user can see. "
+            "CRITICAL RULES:\n"
+            "- ALWAYS use print() to show what was created/computed — users see print output as the execution result\n"
+            "- When generating files (images, PDFs, etc.), print a confirmation: print(f'Created filename.ext')\n"
+            "- After <<<END_CODE>>>, write a brief description of what was created. Generated files are automatically detected and displayed with download links and inline previews.\n"
+            "- Just DO IT — don't explain what you would do, execute the code and produce the file\n"
+            "- If someone asks for an image, chart, PDF, etc. — generate it immediately with code execution\n"
             "You may use multiple CODE_EXECUTE blocks in a single response if needed. "
             "AVAILABLE PACKAGES (pre-installed, just import): math, json, csv, datetime, random, collections, itertools, re, statistics, os, sys, "
             "requests, beautifulsoup4 (from bs4 import BeautifulSoup), fpdf2 (from fpdf import FPDF), lxml, "
@@ -1646,6 +1660,25 @@ def finalize_chat_response(chat, ctx, raw_response):
         save_memory(ctx["memory"])
 
     clean = clean_response(raw_response)
+
+    # Auto-inject file references from code execution into the response
+    if code_results:
+        file_refs = []
+        for cr in code_results:
+            if cr.get("files"):
+                for gf in cr["files"]:
+                    fname = gf["name"]
+                    fpath = gf["path"]
+                    if gf.get("is_image"):
+                        file_refs.append(f"📎 **{fname}** — [View/Download](/api/files/view?path={urllib.parse.quote(fpath)})")
+                    else:
+                        file_refs.append(f"📎 **{fname}** — [Download](/api/files/download?path={urllib.parse.quote(fpath)})")
+        if file_refs:
+            # Only append if the clean text doesn't already reference these files
+            already_mentioned = any(gf["name"] in clean for cr in code_results for gf in cr.get("files", []))
+            if not already_mentioned:
+                clean += "\n\n---\n" + "\n".join(file_refs)
+
     if not chat["messages"] and ctx["user_text"]:
         resolved = ctx["resolved"]
         chat["title"] = generate_chat_title(
@@ -3354,8 +3387,20 @@ def get_folders():
     return jsonify({"folders": sorted(folders)})
 
 # ─── Version & Changelog ──────────────────────────────────────────────────────
-gyro_VERSION = "3.3"
+gyro_VERSION = "3.4"
 gyro_CHANGELOG = [
+    {
+        "version": "3.4",
+        "date": "2026-03-22",
+        "title": "Code Execution & Dev Mode",
+        "changes": [
+            "Code execution now reliably runs, detects generated files, and shows output inline",
+            "Generated files (images, PDFs) auto-display with preview and download links in chat",
+            "Developer mode is now live-toggleable — switch back and forth without creating a new chat",
+            "DEV indicator in topbar when developer mode is active",
+            "AI has better 'common sense' for code execution — just does it instead of explaining",
+        ]
+    },
     {
         "version": "3.3",
         "date": "2026-03-21",

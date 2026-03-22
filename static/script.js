@@ -292,10 +292,42 @@ function toggleDevRaw(on){
   const dot=document.getElementById('devRawDot');
   if(dot)dot.style.transform=on?'translateX(18px)':'none';
   if(dot)dot.style.background=on?'var(--accent)':'var(--text-muted)';
+  // Update topbar indicator
+  const topDev=document.getElementById('devModeIndicator');
+  if(topDev)topDev.style.display=on?'':'none';
+  // Live re-render: re-render current chat to apply new mode
+  if(curChat){
+    reRenderCurrentChat();
+  }
 }
 function initDevRawToggle(){
   const cb=document.getElementById('devRawToggle');
   if(cb){cb.checked=devRawMode;toggleDevRaw(devRawMode);}
+}
+
+async function reRenderCurrentChat(){
+  if(!curChat)return;
+  try{
+    const r=await apiFetch(`/api/chats/${curChat}`);
+    if(!r.ok)return;
+    const chat=await r.json();
+    if(chat.error)return;
+    const area=document.getElementById('chatArea');
+    area.innerHTML='';
+    _suppressCanvasAutoOpen=true;
+    if(chat.messages?.length){
+      for(const m of chat.messages){
+        if(m.role==='user')addMsg('user',m.text,[],m);
+        else addMsg('kairo',m.text,m.files_modified||[],m);
+      }
+      _suppressCanvasAutoOpen=false;
+      setTimeout(()=>{
+        try{Promise.resolve(mermaid.run()).then(()=>enhanceMermaidDiagrams());}catch(e){}
+      },200);
+    }else{
+      _suppressCanvasAutoOpen=false;
+    }
+  }catch(e){console.log('Re-render error:',e);}
 }
 
 // ─── Custom Dialog Engine ────────────────────────
@@ -391,6 +423,9 @@ async function showApp(){
   allChats=loadCachedChats();
   hideSetupReminder();
   updateUserUI();
+  // Initialize dev mode indicator in topbar
+  const topDev=document.getElementById('devModeIndicator');
+  if(topDev)topDev.style.display=devRawMode?'':'none';
   if(!curChat){ loadWelcome(); }
   await ensureOAuthConfigLoaded();
   await loadModels();
@@ -2508,8 +2543,9 @@ function fmtLive(raw){
   html=html.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
   // Inline code
   html=html.replace(/`(.+?)`/g,'<code class="stream-inline-code">$1</code>');
-  // Links
+  // Links — absolute and relative /api/ URLs
   html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
+  html=html.replace(/\[([^\]]+)\]\((\/api\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   // Bare URLs — auto-link any https?:// not already inside an <a> tag
   html=html.replace(/(?<!href=")(?<!src=")(?<!">)(https?:\/\/[^\s<"']+)/g,'<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   // Headings (### at start of line)
@@ -3066,6 +3102,8 @@ function addMsg(role,text,files,extra={}){
       +`<span class="upf-icon">📄</span><span class="upf-label">Pasted text (${lines.length} lines)</span><span class="upf-chevron">▾</span></div>`
       +`<div class="upf-preview">${esc(preview)}${lines.length>3?'\n…':''}</div>`
       +`<div class="upf-full"><pre>${esc(displayText)}</pre></div></div>`;
+  } else if(devRawMode&&role==='kairo'){
+    html+='<pre class="dev-raw-log">'+esc(text||'')+'</pre>';
   } else {
     html+=fmt(displayText);
   }
@@ -3418,8 +3456,9 @@ function fmt(text){
     blocks.push(`<div class="msg-img-wrap"><img src="${url}" alt="${safeAlt}" style="max-width:100%;border-radius:var(--r-md);box-shadow:var(--shadow-sm)" loading="lazy" onerror="this.parentElement.style.display='none'" onclick="openImageLightbox(this.src,this.alt)"><button class="img-expand-btn" onclick="openImageLightbox('${url}','${safeAlt.replace(/'/g,"\\'")}')">⤢</button></div>`);
     return `%%%BLOCK${blocks.length-1}%%%`;
   });
-  // Markdown links: [text](url) — but not images (already handled)
+  // Markdown links: [text](url) — supports both absolute and relative URLs
   t=t.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
+  t=t.replace(/\[([^\]]+)\]\((\/api\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   // Bare URLs — auto-link any https?:// not already inside an <a> tag
   t=t.replace(/(?<!href=")(?<!src=")(?<!">)(https?:\/\/[^\s<"']+)/g,'<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">$1</a>');
   t=t.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
