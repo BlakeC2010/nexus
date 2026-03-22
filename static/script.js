@@ -2477,6 +2477,7 @@ function stripMetaBlocks(text){
     .replace(/<<<THINKING[\s\S]*$/g,'')
     .replace(/(?:<<<QUESTION:.*?>>>\n)?<<<CHOICES(?:\|multi)?>>>[\s\S]*?(<<<END_CHOICES>>>|$)/g,'')
     .replace(/<<<IMAGE_SEARCH:\s*.+?>>>/g,'')
+    .replace(/%%%IMAGE_SEARCH:\s*.+?(?:>>>|%%%)/g,'')
     .replace(/<<<DEEP_RESEARCH[:\s][\s\S]*?>>>/g,'')
     .replace(/<<<DEEP_RESEARCH>>>/g,'')
     .trim();
@@ -2508,6 +2509,7 @@ function fmtLive(raw){
   html=html.replace(/&lt;&lt;&lt;(?:FILE_CREATE|FILE_UPDATE):[\s\S]*$/,''); // unclosed
   html=html.replace(/&lt;&lt;&lt;MEMORY_ADD:[^&]*?&gt;&gt;&gt;/g,'');
   html=html.replace(/&lt;&lt;&lt;IMAGE_SEARCH:[^&]*?&gt;&gt;&gt;/g,'');
+  html=html.replace(/%%%IMAGE_SEARCH:[^%]*?(?:&gt;&gt;&gt;|%%%)/g,'');
   html=html.replace(/&lt;&lt;&lt;CONTINUE&gt;&gt;&gt;/g,'');
   // Completed CODE_EXECUTE blocks — hide raw tags, show placeholder
   html=html.replace(/&lt;&lt;&lt;CODE_EXECUTE:\s*\w+&gt;&gt;&gt;[\s\S]*?&lt;&lt;&lt;END_CODE&gt;&gt;&gt;/g,'<div class="stream-placeholder"><span class="sp-icon">⚙️</span> Executing code...</div>');
@@ -2954,18 +2956,26 @@ async function sendMessage(opts){
             }
             if(data.memory_added?.length)finalHTML+=`<div class="mops">Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
 
-            // ── Image search results — replace inline placeholders ──
+            // ── Image search — show loading placeholders for pending images ──
+            if(data.pending_images?.length){
+              for(const pi of data.pending_images){
+                const loaderId=`img-loader-${pi.index}`;
+                const loaderHTML=`<div class="img-grid-wrap img-loading-placeholder" id="${loaderId}" data-img-index="${pi.index}"><div class="img-grid-header"><span class="img-car-icon">🖼</span> Searching images for "${esc(pi.query)}"...</div><div class="img-loading-shimmer"><div class="img-shimmer-bar"></div><div class="img-shimmer-bar"></div><div class="img-shimmer-bar short"></div></div></div>`;
+                // Replace %%%IMGBLOCK:N%%% placeholders with loaders
+                const re=new RegExp(`<p>\\s*%%%IMGBLOCK:${pi.index}%%%\\s*</p>|%%%IMGBLOCK:${pi.index}%%%`,'g');
+                finalHTML=finalHTML.replace(re,loaderHTML);
+              }
+            }
+
+            // Also replace any remaining image results that came synchronously (reload/history)
             if(data.image_results?.length){
-              // Build a map of index -> rendered HTML
               const imgMap={};
               for(const ir of data.image_results){
                 imgMap[ir.index]=renderImageBlock(ir);
               }
-              // Replace %%%IMGBLOCK:N%%% placeholders in the HTML (may be wrapped in <p> tags by markdown)
               finalHTML=finalHTML.replace(/<p>\s*%%%IMGBLOCK:(\d+)%%%\s*<\/p>|%%%IMGBLOCK:(\d+)%%%/g,(match,idx1,idx2)=>{
                 const idx=parseInt(idx1||idx2,10);
-                const html=imgMap[idx];
-                return html||'';
+                return imgMap[idx]||'';
               });
             }
             if(data.failed_images?.length){
@@ -3048,6 +3058,28 @@ async function sendMessage(opts){
             }
           }else if(data.type==='error'){
             if(canRender())contentEl.innerHTML=`<div style="color:var(--red)">${esc(data.error)}</div>`;
+          }else if(data.type==='image_result'){
+            // Async image result — replace the loading placeholder
+            if(canRender()){
+              const loader=contentEl.querySelector(`#img-loader-${data.image.index}`);
+              if(loader){
+                const html=renderImageBlock(data.image);
+                const temp=document.createElement('div');
+                temp.innerHTML=html;
+                loader.replaceWith(temp.firstElementChild||temp);
+              }
+              area.scrollTop=area.scrollHeight;
+            }
+          }else if(data.type==='image_failed'){
+            // Async image search failed — replace loader with error
+            if(canRender()){
+              const loader=contentEl.querySelector(`#img-loader-${data.index}`);
+              if(loader){
+                loader.innerHTML=`<div class="img-grid-header"><span class="img-search-fail-icon">🖼</span> Image search for "${esc(data.query)}" couldn't load — try again or search manually.</div>`;
+                loader.classList.remove('img-loading-placeholder');
+                loader.classList.add('img-search-fail-block');
+              }
+            }
           }
         }catch(e){}
       }
@@ -3659,7 +3691,7 @@ async function resetData(){
     localStorage.removeItem(ONB_DISMISS_KEY);
     localStorage.removeItem(HOME_WIDGET_CACHE_KEY);
     localStorage.removeItem(CHAT_CACHE_KEY);
-    try{localStorage.removeItem('gyro_productivity');}catch{}
+    try{localStorage.removeItem('gyro_productivity');localStorage.removeItem('gyro_productivity_v1');}catch{}
     closeM('settingsModal');
     curChat=null;curUser=null;
     document.getElementById('appPage').classList.remove('visible');

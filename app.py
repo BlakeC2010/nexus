@@ -1289,8 +1289,9 @@ def extract_research_trigger(text):
 def extract_image_searches(text):
     """Extract <<<IMAGE_SEARCH: query>>> or <<<IMAGE_SEARCH: query | count=N>>> tags.
     Returns (text_with_placeholders, [{'query': str, 'count': int, 'index': int}]).
-    Tags are replaced with <!--IMGBLOCK:index--> placeholders so images render inline."""
-    pattern = re.compile(r'<<<IMAGE_SEARCH:\s*(.+?)>>>')
+    Tags are replaced with %%%IMGBLOCK:index%%% placeholders so images render inline."""
+    # Also catch common malformations: %%%, <<, or mismatched brackets
+    pattern = re.compile(r'(?:<<<|%%%|<<)IMAGE_SEARCH:\s*(.+?)(?:>>>|%%%)') 
     searches = []
     idx = 0
     def _replace(m):
@@ -1391,8 +1392,10 @@ def clean_response(text):
     text = re.sub(r'<<<CODE_EXECUTE:\s*\w+>>>.*?<<<END_CODE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<MEMORY_ADD:\s*.+?>>>', '', text)
     text = re.sub(r'<<<DEEP_RESEARCH:\s*.+?>>>', '', text)
-    text = re.sub(r'<<<IMAGE_SEARCH:\s*.+?>>>', '', text)
+    text = re.sub(r'(?:<<<|%%%|<<)IMAGE_SEARCH:\s*.+?(?:>>>|%%%)', '', text)
     text = re.sub(r'<<<CONTINUE>>>', '', text)
+    # Strip image placeholders so saved messages are clean
+    text = re.sub(r'%%%IMGBLOCK:\d+%%%', '', text)
     return text.strip()
 
 _YT_RE = re.compile(r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{11})')
@@ -3099,30 +3102,11 @@ def chat_message_stream(chat_id):
                     raw_text = f"<<<THINKING>>>\n{think_text}\n<<<END_THINKING>>>\n{raw_text}"
             # Check if AI triggered deep research
             raw_text, research_query = extract_research_trigger(raw_text)
-            # Extract image search queries and fetch results (parallel)
+            # Extract image search queries — placeholders will be replaced on the client
             raw_text, image_searches = extract_image_searches(raw_text)
-            image_results = []
-            failed_image_queries = []
-            if image_searches:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                def _img_search(entry):
-                    imgs = search_images(entry['query'], num=entry['count'])
-                    return entry, imgs
-                with ThreadPoolExecutor(max_workers=min(len(image_searches), 4)) as pool:
-                    futs = {pool.submit(_img_search, entry): entry for entry in image_searches}
-                    for fut in as_completed(futs):
-                        entry, imgs = fut.result()
-                        if imgs:
-                            image_results.append({"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']})
-                        else:
-                            failed_image_queries.append(entry['query'])
             # Detect <<<CONTINUE>>> BEFORE clean_response strips it
             should_continue = '<<<CONTINUE>>>' in raw_text
             clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
-            # Persist image results in the saved message so they survive reload
-            if image_results:
-                chat["messages"][-1]["image_results"] = image_results
-                save_chat(chat)
             done_payload = {
                 "type": "done",
                 "reply": clean,
@@ -3136,11 +3120,35 @@ def chat_message_stream(chat_id):
                 done_payload["code_results"] = code_results
             if research_query:
                 done_payload["research_trigger"] = research_query
-            if image_results:
-                done_payload["image_results"] = image_results
-            if failed_image_queries:
-                done_payload["failed_images"] = failed_image_queries
+            # Tell the client which image searches are pending so it can show loaders
+            if image_searches:
+                done_payload["pending_images"] = [{"query": s["query"], "index": s["index"], "count": s["count"]} for s in image_searches]
             yield event(done_payload)
+
+            # Now fetch images AFTER the done event so the text renders immediately
+            if image_searches:
+                image_results = []
+                failed_image_queries = []
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                def _img_search(entry):
+                    imgs = search_images(entry['query'], num=entry['count'])
+                    return entry, imgs
+                with ThreadPoolExecutor(max_workers=min(len(image_searches), 4)) as pool:
+                    futs = {pool.submit(_img_search, entry): entry for entry in image_searches}
+                    for fut in as_completed(futs):
+                        entry, imgs = fut.result()
+                        if imgs:
+                            result = {"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']}
+                            image_results.append(result)
+                            # Stream each image result as it completes
+                            yield event({"type": "image_result", "image": result})
+                        else:
+                            failed_image_queries.append(entry['query'])
+                            yield event({"type": "image_failed", "query": entry['query'], "index": entry['index']})
+                # Persist image results in the saved message so they survive reload
+                if image_results:
+                    chat["messages"][-1]["image_results"] = image_results
+                    save_chat(chat)
         except Exception as e:
             err = str(e)
             if any(w in err.lower() for w in ("429", "quota", "rate")):
