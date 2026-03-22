@@ -4,5 +4,5 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2 --worker-class gthread --threads 4
     autoDeploy: true

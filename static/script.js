@@ -2454,12 +2454,16 @@ function fmtLive(raw){
   if(/&lt;&lt;&lt;DEEP_RESEARCH/i.test(html)){
     html=html.replace(/&lt;&lt;&lt;DEEP_RESEARCH[\s\S]*$/,'');
   }
-  // Strip FILE_CREATE / FILE_UPDATE / MEMORY_ADD / IMAGE_SEARCH / CONTINUE tags from live display
+  // Strip FILE_CREATE / FILE_UPDATE / MEMORY_ADD / IMAGE_SEARCH / CONTINUE / CODE_EXECUTE tags from live display
   html=html.replace(/&lt;&lt;&lt;(?:FILE_CREATE|FILE_UPDATE):[\s\S]*?&lt;&lt;&lt;END_FILE&gt;&gt;&gt;/g,'');
   html=html.replace(/&lt;&lt;&lt;(?:FILE_CREATE|FILE_UPDATE):[\s\S]*$/,''); // unclosed
   html=html.replace(/&lt;&lt;&lt;MEMORY_ADD:[^&]*?&gt;&gt;&gt;/g,'');
   html=html.replace(/&lt;&lt;&lt;IMAGE_SEARCH:[^&]*?&gt;&gt;&gt;/g,'');
   html=html.replace(/&lt;&lt;&lt;CONTINUE&gt;&gt;&gt;/g,'');
+  // Completed CODE_EXECUTE blocks — hide raw tags, show placeholder
+  html=html.replace(/&lt;&lt;&lt;CODE_EXECUTE:\s*\w+&gt;&gt;&gt;[\s\S]*?&lt;&lt;&lt;END_CODE&gt;&gt;&gt;/g,'<div class="stream-placeholder"><span class="sp-icon">⚙️</span> Executing code...</div>');
+  // Unclosed CODE_EXECUTE block (still streaming)
+  html=html.replace(/&lt;&lt;&lt;CODE_EXECUTE:\s*\w+&gt;&gt;&gt;[\s\S]*$/,'<div class="stream-placeholder"><span class="sp-icon">⚙️</span> Writing code to execute...</div>');
   // Unclosed mermaid block
   if(/```mermaid\n/i.test(html)&&!(/```mermaid\n[\s\S]*?```/.test(html))){
     html=html.replace(/```mermaid\n[\s\S]*$/,'<div class="stream-placeholder"><span class="sp-icon">●</span> Generating mind map...</div>');
@@ -2859,7 +2863,21 @@ async function sendMessage(opts){
             if(data.code_results?.length){
               for(const cr of data.code_results){
                 const statusCls=cr.success?'code-run-success':'code-run-error';
-                finalHTML+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre></div>`;
+                let filesHtml='';
+                if(cr.files?.length){
+                  filesHtml='<div class="crb-files">';
+                  for(const gf of cr.files){
+                    const dlUrl='/api/files/download?path='+encodeURIComponent(gf.path);
+                    const viewUrl='/api/files/view?path='+encodeURIComponent(gf.path);
+                    if(gf.is_image){
+                      filesHtml+=`<div class="crb-file crb-file-image"><img src="${viewUrl}" alt="${esc(gf.name)}" style="max-width:100%;max-height:400px;border-radius:var(--r-md);margin:6px 0;cursor:pointer" onclick="openImageLightbox(this.src,'${esc(gf.name).replace(/'/g,"\\'")}')" onerror="this.style.display='none'"><div class="crb-file-link"><a href="${dlUrl}" target="_blank" class="fo-link">📎 ${esc(gf.name)}</a><span class="crb-file-size">${gf.size>1024?(gf.size/1024).toFixed(1)+'KB':gf.size+'B'}</span></div></div>`;
+                    }else{
+                      filesHtml+=`<div class="crb-file"><a href="${dlUrl}" target="_blank" class="fo-link">📎 ${esc(gf.name)}</a><span class="crb-file-size">${gf.size>1024?(gf.size/1024).toFixed(1)+'KB':gf.size+'B'}</span></div>`;
+                    }
+                  }
+                  filesHtml+='</div>';
+                }
+                finalHTML+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre>${filesHtml}</div>`;
               }
             }
             if(data.memory_added?.length)finalHTML+=`<div class="mops">Remembered: ${data.memory_added.map(esc).join('; ')}</div>`;
@@ -3038,7 +3056,21 @@ function addMsg(role,text,files,extra={}){
   if(extra.code_results?.length){
     for(const cr of extra.code_results){
       const statusCls=cr.success?'code-run-success':'code-run-error';
-      html+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre></div>`;
+      let filesHtml='';
+      if(cr.files?.length){
+        filesHtml='<div class="crb-files">';
+        for(const gf of cr.files){
+          const dlUrl='/api/files/download?path='+encodeURIComponent(gf.path);
+          const viewUrl='/api/files/view?path='+encodeURIComponent(gf.path);
+          if(gf.is_image){
+            filesHtml+=`<div class="crb-file crb-file-image"><img src="${viewUrl}" alt="${esc(gf.name)}" style="max-width:100%;max-height:400px;border-radius:var(--r-md);margin:6px 0;cursor:pointer" onclick="openImageLightbox(this.src,'${esc(gf.name).replace(/'/g,"\\'")}')" onerror="this.style.display='none'"><div class="crb-file-link"><a href="${dlUrl}" target="_blank" class="fo-link">📎 ${esc(gf.name)}</a><span class="crb-file-size">${gf.size>1024?(gf.size/1024).toFixed(1)+'KB':gf.size+'B'}</span></div></div>`;
+          }else{
+            filesHtml+=`<div class="crb-file"><a href="${dlUrl}" target="_blank" class="fo-link">📎 ${esc(gf.name)}</a><span class="crb-file-size">${gf.size>1024?(gf.size/1024).toFixed(1)+'KB':gf.size+'B'}</span></div>`;
+          }
+        }
+        filesHtml+='</div>';
+      }
+      html+=`<div class="code-run-block ${statusCls}"><div class="crb-header"><span class="crb-lang">${esc(cr.language)}</span><span class="crb-status">${cr.success?'✓ Executed':'✗ Error'}</span></div><pre class="crb-code"><code>${esc(cr.code)}</code></pre><div class="crb-output-label">Output</div><pre class="crb-output">${esc(cr.output)}</pre>${filesHtml}</div>`;
     }
   }
   if(extra.memory_added?.length)html+=`<div class="mops">Remembered: ${extra.memory_added.map(esc).join('; ')}</div>`;

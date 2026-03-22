@@ -1192,17 +1192,30 @@ def extract_memory_ops(text):
 # ─── Code Execution ──────────────────────────────────────────────────────────
 
 def execute_code_blocks(text):
-    """Extract <<<CODE_EXECUTE: lang>>>...<<<END_CODE>>> blocks, execute them, and return results."""
+    """Extract <<<CODE_EXECUTE: lang>>>...<<<END_CODE>>> blocks, execute them, and return results.
+    Also detects files created/modified by the code and includes them in results."""
     import subprocess, tempfile, os
     pattern = r'<<<CODE_EXECUTE:\s*(\w+)>>>\n(.*?)<<<END_CODE>>>'
     results = []
+    # Protected dirs/files that code shouldn't claim credit for
+    _ignore_dirs = {'.git', '__pycache__', '.venv', 'static', 'node_modules'}
+    _ignore_files = {'app.py', 'requirements.txt', 'Procfile', 'render.yaml', '.env', '.gitignore'}
     for m in re.finditer(pattern, text, re.DOTALL):
         lang = m.group(1).strip().lower()
         code = m.group(2).strip()
         if lang not in ("python", "py"):
-            results.append({"language": lang, "code": code, "output": f"Execution not supported for '{lang}'.", "success": False})
+            results.append({"language": lang, "code": code, "output": f"Execution not supported for '{lang}'.", "success": False, "files": []})
             continue
         try:
+            # Snapshot workspace files before execution to detect new/modified files
+            pre_snapshot = {}
+            for p in WORKSPACE.rglob('*'):
+                if p.is_file() and not any(part in _ignore_dirs for part in p.relative_to(WORKSPACE).parts):
+                    if p.name not in _ignore_files:
+                        try:
+                            pre_snapshot[str(p.relative_to(WORKSPACE))] = p.stat().st_mtime
+                        except Exception:
+                            pass
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
                 tmp.write(code)
                 tmp_path = tmp.name
@@ -1223,13 +1236,33 @@ def execute_code_blocks(text):
                 filtered_stderr = "\n".join(stderr_lines).strip()
                 if filtered_stderr:
                     output += ("\n" if output else "") + filtered_stderr
-            results.append({"language": lang, "code": code, "output": output.strip() or "(no output)", "success": result.returncode == 0})
+            # Detect new/modified files after execution
+            generated_files = []
+            for p in WORKSPACE.rglob('*'):
+                if p.is_file() and not any(part in _ignore_dirs for part in p.relative_to(WORKSPACE).parts):
+                    if p.name not in _ignore_files:
+                        try:
+                            rel = str(p.relative_to(WORKSPACE)).replace('\\', '/')
+                            mtime = p.stat().st_mtime
+                            if rel not in pre_snapshot or mtime > pre_snapshot[rel]:
+                                # Determine if it's viewable (image) or just downloadable
+                                ext = p.suffix.lower()
+                                is_image = ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp')
+                                generated_files.append({
+                                    "path": rel,
+                                    "name": p.name,
+                                    "size": p.stat().st_size,
+                                    "is_image": is_image,
+                                })
+                        except Exception:
+                            pass
+            results.append({"language": lang, "code": code, "output": output.strip() or "(no output)", "success": result.returncode == 0, "files": generated_files})
         except subprocess.TimeoutExpired:
             try: os.unlink(tmp_path)
             except Exception: pass
-            results.append({"language": lang, "code": code, "output": "Execution timed out (30s limit).", "success": False})
+            results.append({"language": lang, "code": code, "output": "Execution timed out (30s limit).", "success": False, "files": []})
         except Exception as e:
-            results.append({"language": lang, "code": code, "output": f"Error: {e}", "success": False})
+            results.append({"language": lang, "code": code, "output": f"Error: {e}", "success": False, "files": []})
     return results
 
 def extract_research_trigger(text):
@@ -3290,6 +3323,24 @@ def download_workspace_file():
         return jsonify({"error": "Access denied"}), 403
     return send_from_directory(str(fp.parent), fp.name, as_attachment=True)
 
+
+@app.route("/api/files/view")
+@require_auth_or_guest
+def view_workspace_file():
+    """Serve a workspace file inline (for images, etc). Same security as download."""
+    path = (request.args.get("path") or "").strip()
+    if not path or ".." in path or path.startswith("/"):
+        return jsonify({"error": "Invalid path"}), 400
+    clean = Path(path).as_posix()
+    fp = WORKSPACE / clean
+    if not fp.exists() or not fp.is_file():
+        return jsonify({"error": "File not found"}), 404
+    if fp.name in SERVER_FILES:
+        return jsonify({"error": "Access denied"}), 403
+    if any(part in SERVER_DIRS for part in Path(clean).parts):
+        return jsonify({"error": "Access denied"}), 403
+    return send_from_directory(str(fp.parent), fp.name, as_attachment=False)
+
 @app.route("/api/folders")
 @require_auth
 def get_folders():
@@ -3475,17 +3526,34 @@ def _lazy_import_ddg():
     except ImportError:
         from duckduckgo_search import DDGS; return DDGS
 
-def _fetch_url_text(url, timeout=12):
-    """Fetch URL, strip boilerplate, return up to 8 000 chars of plain text."""
+def _fetch_url_text(url, timeout=12, max_bytes=200_000):
+    """Fetch URL, strip boilerplate, return up to 6 000 chars of plain text.
+    Limits download to max_bytes to prevent OOM on large pages."""
     try:
         req, BS = _lazy_import_bs()
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
-        resp = req.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        resp = req.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
         resp.raise_for_status()
         ct = resp.headers.get("content-type", "")
         if "text" not in ct:
+            resp.close()
             return None
-        soup = BS(resp.text, "lxml")
+        # Check Content-Length if available
+        cl = resp.headers.get("content-length", "")
+        if cl and cl.isdigit() and int(cl) > max_bytes * 3:
+            resp.close()
+            return None
+        # Read limited bytes to prevent OOM
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=32768, decode_unicode=False):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= max_bytes:
+                break
+        resp.close()
+        raw_html = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+        soup = BS(raw_html, "lxml")
         for tag in soup(["script","style","nav","header","footer","aside","form","iframe","noscript"]):
             tag.decompose()
         main = (soup.find("main") or soup.find("article") or
@@ -3495,7 +3563,7 @@ def _fetch_url_text(url, timeout=12):
         text = main.get_text(separator=" ", strip=True) if main else soup.get_text(separator=" ", strip=True)
         text = re.sub(r"[ \t]{3,}", "  ", text)
         text = re.sub(r"\n{4,}", "\n\n\n", text)
-        return text[:8000]
+        return text[:6000]
     except Exception:
         return None
 
@@ -3754,10 +3822,10 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
         return fallback
 
     cfg = {
-        "quick":    {"sections": 4,  "scout_budget": 8,  "deepen_budget": 4,  "max_fetch": 12, "report_tokens": 8000,  "report_min": 2000, "detail": "concise but insightful"},
-        "standard": {"sections": 6,  "scout_budget": 12, "deepen_budget": 6,  "max_fetch": 20, "report_tokens": 12000, "report_min": 4000, "detail": "thorough and comprehensive"},
-        "deep":     {"sections": 8,  "scout_budget": 18, "deepen_budget": 10, "max_fetch": 35, "report_tokens": 16000, "report_min": 7000, "detail": "exhaustive, deeply analytical, and authoritative"},
-    }.get(depth, {"sections": 6, "scout_budget": 12, "deepen_budget": 6, "max_fetch": 20, "report_tokens": 12000, "report_min": 4000, "detail": "thorough and comprehensive"})
+        "quick":    {"sections": 3,  "scout_budget": 4,  "deepen_budget": 2,  "max_fetch": 6,   "report_tokens": 6000,  "report_min": 1500, "detail": "concise but insightful"},
+        "standard": {"sections": 5,  "scout_budget": 8,  "deepen_budget": 3,  "max_fetch": 10,  "report_tokens": 10000, "report_min": 3000, "detail": "thorough and comprehensive"},
+        "deep":     {"sections": 7,  "scout_budget": 12, "deepen_budget": 5,  "max_fetch": 16,  "report_tokens": 14000, "report_min": 5000, "detail": "exhaustive, deeply analytical, and authoritative"},
+    }.get(depth, {"sections": 5, "scout_budget": 8, "deepen_budget": 3, "max_fetch": 10, "report_tokens": 10000, "report_min": 3000, "detail": "thorough and comprehensive"})
 
     total_steps = 7  # Plan, Scout, Read, Deepen, Synthesize, Verify, Export
     notes = {}           # section_title -> [bullet_notes]
@@ -3785,6 +3853,7 @@ def _run_research_job(job_id, query, depth, resolved, user_plan=None):
 
     try:
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        import gc as _gc
 
         # ══════════════════════════════════════════════════════════════
         # PHASE 1: PLANNING (timeout: 60s, retries: 1)
@@ -3945,42 +4014,52 @@ Angle 2: "query1" | "query2"
 
         # ══════════════════════════════════════════════════════════════
         # PHASE 3: READ & SUMMARIZE — Parallel fetch + bullet notes
-        # Each source fetch can fail independently
+        # Wrapped in own try/except so failure here doesn't kill pipeline
         # ══════════════════════════════════════════════════════════════
-        push("progress", step="reading", pct=29, total_steps=total_steps, current_step=3,
-             message=f"Reading up to {min(len(all_sources), cfg['max_fetch'])} sources in parallel...")
-
         fetched = []
-        fetch_total = min(len(all_sources), cfg["max_fetch"])
-        to_fetch = all_sources[:fetch_total]
+        try:
+            push("progress", step="reading", pct=29, total_steps=total_steps, current_step=3,
+                 message=f"Reading up to {min(len(all_sources), cfg['max_fetch'])} sources...")
 
-        def _fetch_one(result):
-            if is_cancelled():
-                return None
-            try:
-                return (result, _fetch_url_text(result["url"], timeout=10))
-            except Exception:
-                return (result, None)
+            fetch_total = min(len(all_sources), cfg["max_fetch"])
+            to_fetch = all_sources[:fetch_total]
 
-        done_count = 0
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            futures = {pool.submit(_fetch_one, r): r for r in to_fetch}
-            for future in as_completed(futures):
+            def _fetch_one(result):
                 if is_cancelled():
-                    push("cancelled"); job["status"] = "cancelled"; return
+                    return None
                 try:
-                    pair = future.result()
-                    if pair:
-                        result, text = pair
-                        if text and len(text) > 150:
-                            fetched.append({**result, "text": text})
+                    return (result, _fetch_url_text(result["url"], timeout=8))
                 except Exception:
-                    pass
-                done_count += 1
-                if done_count % 5 == 0 or done_count == fetch_total:
+                    return (result, None)
+
+            done_count = 0
+            # Reduced workers (3) to limit memory usage on constrained hosts
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = {pool.submit(_fetch_one, r): r for r in to_fetch}
+                for future in as_completed(futures):
+                    if is_cancelled():
+                        push("cancelled"); job["status"] = "cancelled"; return
+                    try:
+                        pair = future.result(timeout=15)
+                        if pair:
+                            result, text = pair
+                            if text and len(text) > 150:
+                                fetched.append({**result, "text": text})
+                    except Exception:
+                        pass
+                    done_count += 1
+                    # Push progress every single source (keeps proxy connection alive)
                     pct = 29 + int((done_count / max(fetch_total, 1)) * 8)
                     push("progress", step="reading", pct=min(pct, 37), total_steps=total_steps, current_step=3,
-                         message=f"Read {done_count}/{fetch_total} sources ({len(fetched)} extracted)...")
+                         message=f"Read {done_count}/{fetch_total} sources ({len(fetched)} useful)...")
+
+            push("progress", step="reading", pct=37, total_steps=total_steps, current_step=3,
+                 message=f"Read phase done: {len(fetched)} sources extracted.")
+
+        except Exception as read_err:
+            print(f"  [research] Read phase error (non-fatal): {read_err}")
+            push("progress", step="reading", pct=37, total_steps=total_steps, current_step=3,
+                 message=f"Read phase completed partially ({len(fetched)} extracted). Continuing...")
 
         # Fall back to snippets if fetching yielded little
         if len(fetched) < 3:
@@ -3988,61 +4067,63 @@ Angle 2: "query1" | "query2"
                 if r.get("snippet") and len(r["snippet"]) > 80:
                     fetched.append({**r, "text": r["snippet"]})
 
-        push("progress", step="reading", pct=38, total_steps=total_steps, current_step=3,
-             message=f"Extracted {len(fetched)} sources. Generating section notes...")
-
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
 
-        # Group fetched by section and generate bullet-note summaries
-        section_sources = {}
-        for f in fetched:
-            sec = f.get("section", sub_questions[0])
-            section_sources.setdefault(sec, []).append(f)
+        # ── Summarize into section notes ──
+        try:
+            push("progress", step="reading", pct=38, total_steps=total_steps, current_step=3,
+                 message=f"{len(fetched)} sources ready. Generating section notes...")
 
-        def _summarize_section(sq, sources_for_section):
-            if not sources_for_section or is_cancelled():
-                return sq, []
-            source_text = "\n\n".join(
-                f"Source: {s.get('title','Untitled')} ({s['url']})\n{s['text'][:4000]}"
-                for s in sources_for_section[:6]
-            )
-            summary = safe_ai_call(
-                f"""Extract key facts from these sources about: {sq}
+            section_sources = {}
+            for f in fetched:
+                sec = f.get("section", sub_questions[0])
+                section_sources.setdefault(sec, []).append(f)
 
-{source_text[:12000]}
+            def _summarize_section(sq, sources_for_section):
+                if not sources_for_section or is_cancelled():
+                    return sq, []
+                source_text = "\n\n".join(
+                    f"Source: {s.get('title','Untitled')} ({s['url']})\n{s['text'][:3000]}"
+                    for s in sources_for_section[:5]
+                )
+                summary = safe_ai_call(
+                    f"""Extract key facts from these sources about: {sq}
 
-List the most important facts, statistics, data points, quotes, and insights as bullet points.
-Be exhaustive but concise. Each bullet should be one key fact or finding.""",
-                max_tokens=1000, timeout=60, retries=1, fallback=""
-            )
-            bullets = [line.strip().lstrip("\u2022-* ") for line in (summary or "").split("\n")
-                       if line.strip() and len(line.strip()) > 10 and not line.strip().startswith("#")]
-            return sq, bullets
+{source_text[:10000]}
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(_summarize_section, sq, section_sources.get(sq, [])): sq
-                       for sq in sub_questions}
-            done_s = 0
-            for future in as_completed(futures):
+List the most important facts, statistics, and insights as bullet points.""",
+                    max_tokens=800, timeout=60, retries=0, fallback=""
+                )
+                bullets = [line.strip().lstrip("\u2022-* ") for line in (summary or "").split("\n")
+                           if line.strip() and len(line.strip()) > 10 and not line.strip().startswith("#")]
+                return sq, bullets
+
+            # Summarize sections sequentially (more stable than parallel on constrained hosts)
+            for sq_idx, sq in enumerate(sub_questions):
                 if is_cancelled():
                     push("cancelled"); job["status"] = "cancelled"; return
                 try:
-                    sq, bullets = future.result()
+                    _, bullets = _summarize_section(sq, section_sources.get(sq, []))
                     notes[sq] = bullets
                 except Exception as e:
-                    print(f"  [research] Section summary failed (non-fatal): {e}")
-                done_s += 1
-                pct = 38 + int((done_s / max(len(sub_questions), 1)) * 12)
+                    print(f"  [research] Section summary failed for '{sq[:40]}' (non-fatal): {e}")
+                pct = 38 + int(((sq_idx + 1) / max(len(sub_questions), 1)) * 12)
                 push("progress", step="reading", pct=min(pct, 50), total_steps=total_steps, current_step=3,
-                     message=f"Summarized {done_s}/{len(sub_questions)} sections...")
+                     message=f"Summarized {sq_idx + 1}/{len(sub_questions)} sections...")
 
-        # Checkpoint: scouting notes saved
+        except Exception as summ_err:
+            print(f"  [research] Summary phase error (non-fatal): {summ_err}")
+            push("progress", step="reading", pct=50, total_steps=total_steps, current_step=3,
+                 message="Summary phase completed with errors. Continuing...")
+
+        # Checkpoint: notes saved
         total_notes = sum(len(v) for v in notes.values())
         push("progress", step="reading", pct=50, total_steps=total_steps, current_step=3,
-             message=f"Scouting complete: {total_notes} notes across {len(notes)} sections.")
+             message=f"Read phase complete: {total_notes} notes across {len(notes)} sections.")
         job["notes"] = dict(notes)
         job["sources_list"] = list(all_sources)
+        _gc.collect()  # free memory from fetch/parse before next phase
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
@@ -4115,6 +4196,7 @@ Output one query per line, nothing else.""",
         # Checkpoint: deepened notes
         job["notes"] = dict(notes)
         job["sources_list"] = list(all_sources)
+        _gc.collect()  # free memory before synthesis
 
         if is_cancelled():
             push("cancelled"); job["status"] = "cancelled"; return
@@ -4358,32 +4440,39 @@ REPORT:
         tb = traceback.format_exc()
         print(f"  [research] Pipeline crashed: {e}\n{tb}")
 
-        # Crash recovery: try to return a partial report from notes
-        if notes and any(v for v in notes.values()):
-            partial = _build_partial_report()
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_q = re.sub(r"[^\w\s-]", "", query[:40]).strip().replace(" ", "_")
-            md_fn = f"research_{safe_q}_{ts}_partial.md"
-            rdir = WORKSPACE / "notes" / "research"
-            rdir.mkdir(parents=True, exist_ok=True)
-            try:
-                (rdir / md_fn).write_text(partial, encoding="utf-8")
-            except Exception:
-                pass
-
-            push("done",
-                 report=partial,
-                 partial=True,
-                 pdf_file=None,
-                 md_file=md_fn,
-                 sources=[{"title": s.get("title", ""), "url": s.get("url", ""), "snippet": s.get("snippet", "")}
-                          for s in all_sources[:20]],
-                 sub_questions=list(notes.keys()),
-                 source_count=len(all_sources),
-                 error_note=f"Research completed partially due to error: {str(e)[:200]}"
-            )
-            job["status"] = "done"
-        else:
+        # Crash recovery: always try to return SOMETHING rather than error
+        try:
+            partial = _build_partial_report() if (notes and any(v for v in notes.values())) else ""
+            if not partial and all_sources:
+                # Even without notes, list the sources we found
+                partial = f"# {query}\n\n*Research was interrupted. Sources found below.*\n\n"
+                partial += "\n".join(f"- [{s.get('title','Untitled')}]({s.get('url','')})" for s in all_sources[:20])
+            if partial:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_q = re.sub(r"[^\w\s-]", "", query[:40]).strip().replace(" ", "_")
+                md_fn = f"research_{safe_q}_{ts}_partial.md"
+                rdir = WORKSPACE / "notes" / "research"
+                rdir.mkdir(parents=True, exist_ok=True)
+                try:
+                    (rdir / md_fn).write_text(partial, encoding="utf-8")
+                except Exception:
+                    md_fn = None
+                push("done",
+                     report=partial,
+                     partial=True,
+                     pdf_file=None,
+                     md_file=md_fn,
+                     sources=[{"title": s.get("title", ""), "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                              for s in all_sources[:20]],
+                     sub_questions=list(notes.keys()) if notes else [query],
+                     source_count=len(all_sources),
+                     error_note=f"Research completed partially: {str(e)[:200]}"
+                )
+                job["status"] = "done"
+            else:
+                push("error", error=f"Research failed: {str(e)[:200]}")
+                job["status"] = "error"
+        except Exception:
             push("error", error=f"Research failed: {str(e)[:200]}")
             job["status"] = "error"
 
@@ -4401,10 +4490,10 @@ def research_plan():
         depth = "standard"
 
     depth_cfg = {
-        "quick":    {"sub_q": 4},
-        "standard": {"sub_q": 6},
-        "deep":     {"sub_q": 8},
-    }.get(depth, {"sub_q": 6})
+        "quick":    {"sub_q": 3},
+        "standard": {"sub_q": 5},
+        "deep":     {"sub_q": 7},
+    }.get(depth, {"sub_q": 5})
 
     settings = load_settings()
     available_model = None
@@ -4540,11 +4629,11 @@ def start_research():
                 job["cancelled"] = True
                 job["status"] = "error"
                 break
-            # Send heartbeat every 5 seconds to prevent connection timeout
-            if _time.time() - last_send > 5:
+            # Send heartbeat every 2 seconds to prevent proxy/connection timeout
+            if _time.time() - last_send > 2:
                 yield json.dumps({"type": "heartbeat"}) + "\n"
                 last_send = _time.time()
-            _time.sleep(0.25)
+            _time.sleep(0.2)
         # Clean up old jobs (keep last 20)
         if len(_research_jobs) > 20:
             oldest = sorted(_research_jobs.keys(),
@@ -4552,7 +4641,12 @@ def start_research():
             for k in oldest:
                 _research_jobs.pop(k, None)
 
-    return Response(generate(), mimetype="application/x-ndjson")
+    # Critical: disable nginx/proxy buffering so heartbeats reach client immediately
+    resp = Response(generate(), mimetype="application/x-ndjson")
+    resp.headers["X-Accel-Buffering"] = "no"        # nginx
+    resp.headers["Cache-Control"] = "no-cache"        # general
+    resp.headers["Transfer-Encoding"] = "chunked"
+    return resp
 
 
 @app.route("/api/research/download/<path:filename>")
