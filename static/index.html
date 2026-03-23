@@ -25,6 +25,17 @@
     <div class="login-glow login-glow-1"></div>
     <div class="login-glow login-glow-2"></div>
     <div class="login-glow login-glow-3"></div>
+    <!-- Floating particles -->
+    <div class="login-particles">
+      <span class="lp" style="--d:11s;--x:15%;--y:20%"></span>
+      <span class="lp" style="--d:17s;--x:75%;--y:10%"></span>
+      <span class="lp" style="--d:13s;--x:45%;--y:70%"></span>
+      <span class="lp" style="--d:19s;--x:85%;--y:55%"></span>
+      <span class="lp" style="--d:15s;--x:25%;--y:85%"></span>
+      <span class="lp" style="--d:21s;--x:60%;--y:30%"></span>
+      <span class="lp" style="--d:14s;--x:10%;--y:50%"></span>
+      <span class="lp" style="--d:18s;--x:90%;--y:80%"></span>
+    </div>
   </div>
 
   <div class="login-card">
@@ -56,12 +67,31 @@
       <span>Your data stays private. Nothing is shared or sold.</span>
     </div>
   </div>
+
+  <!-- Feature highlights -->
+  <div class="login-features">
+    <div class="login-feat">
+      <span class="lf-icon">🧠</span>
+      <span class="lf-text">Multi-Model AI</span>
+    </div>
+    <div class="login-feat">
+      <span class="lf-icon">🔍</span>
+      <span class="lf-text">Deep Research</span>
+    </div>
+    <div class="login-feat">
+      <span class="lf-icon">⚡</span>
+      <span class="lf-text">Memory & Tools</span>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════
      APP SHELL
      ═══════════════════════════════════════════════════ -->
 <div class="app" id="appPage">
+
+<!-- Sidebar overlay for mobile -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSB()"></div>
 
 <!-- ── Sidebar ── -->
 <aside class="sidebar" id="sidebar">
@@ -163,7 +193,7 @@
               <div class="plus-item" onclick="activateTool('research');closePlusMenu()"><span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span><span class="pi-label">Deep Research</span></div>
               <div class="plus-item" onclick="activateTool('code');closePlusMenu()"><span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span><span class="pi-label">Code Execution</span></div>
 
-              <div class="plus-item disabled" onclick="event.stopPropagation()"><span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg></span><span class="pi-label">Image Generation</span><span class="pi-badge">SOON</span></div>
+              <div class="plus-item" onclick="activateTool('imagegen');closePlusMenu()"><span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg></span><span class="pi-label">Image Generation</span></div>
 
             </div>
           </div>
@@ -452,7 +482,7 @@
       </div>
     </div>
     <div class="upgrade-plans">
-      <div class="uplan" id="uplanFree">
+      <div class="uplan" id="uplanFree" onclick="applyPlanChange('free')">
         <div class="uplan-name">Free</div>
         <div class="uplan-price">$0 <span>/mo</span></div>
         <div class="uplan-desc">Great for casual use and exploring Gyro.</div>
@@ -463,7 +493,7 @@
           <li class="no">Priority access</li>
         </ul>
       </div>
-      <div class="uplan recommended" id="uplanPro">
+      <div class="uplan recommended" id="uplanPro" onclick="applyPlanChange('pro')">
         <div class="uplan-badge">RECOMMENDED</div>
         <div class="uplan-name">Pro</div>
         <div class="uplan-price">$20 <span>/mo</span></div>
@@ -475,7 +505,7 @@
           <li>Priority access</li>
         </ul>
       </div>
-      <div class="uplan uplan-max" id="uplanMax">
+      <div class="uplan uplan-max" id="uplanMax" onclick="applyPlanChange('max')">
         <div class="uplan-badge">ULTIMATE</div>
         <div class="uplan-name">Max</div>
         <div class="uplan-price">$100 <span>/mo</span></div>
@@ -487,7 +517,7 @@
           <li>Early access to experimental features</li>
         </ul>
       </div>
-      <div class="uplan uplan-dev" id="uplanDev">
+      <div class="uplan uplan-dev" id="uplanDev" onclick="applyPlanChange('dev')">
         <div class="uplan-badge">TEMP</div>
         <div class="uplan-name">Developer</div>
         <div class="uplan-price">$0 <span>/mo</span></div>

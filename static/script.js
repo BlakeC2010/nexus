@@ -1,6 +1,6 @@
 // ─── State ────────────────────────────────────────
 let curChat=null,allChats=[],ttsOn=false,recording=false,recognition=null,pendingFiles=[],pendingFolder='';
-let _continueCount=0;const _MAX_CONTINUES=15;
+let _continueCount=0;const _MAX_CONTINUES=5;
 let _nextStreamId=0;
 let curUser=null,isGuest=false,authMode='login',theme='dark',googleClientId='';
 let googleInitDone=false,thinkingEnabled=false,guestAuthMode='register';
@@ -1193,7 +1193,64 @@ async function submitOnboarding(){
 }
 
 // ─── Sidebar ──────────────────────────────────────
-function toggleSB(){document.getElementById('sidebar').classList.toggle('closed')}
+function toggleSB(){
+  const sb=document.getElementById('sidebar');
+  sb.classList.toggle('closed');
+  const overlay=document.getElementById('sidebarOverlay');
+  if(overlay){
+    if(sb.classList.contains('closed'))overlay.classList.remove('active');
+    else if(window.innerWidth<=768)overlay.classList.add('active');
+  }
+}
+
+/* Download generated image as PNG */
+async function downloadGenImage(url,prompt){
+  try{
+    const resp=await fetch(url);
+    const blob=await resp.blob();
+    const name=(prompt||'generated_image').replace(/[^a-zA-Z0-9 ]/g,'').trim().replace(/\s+/g,'_').slice(0,60)||'generated_image';
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=name+'.png';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }catch(e){showToast('Download failed','error');}
+}
+
+/* Sidebar — close on outside click (mobile) */
+document.addEventListener('click',function(e){
+  if(window.innerWidth>768)return;
+  const sb=document.getElementById('sidebar');
+  if(!sb||sb.classList.contains('closed'))return;
+  if(sb.contains(e.target))return;
+  // Don't close if clicking the menu button itself
+  if(e.target.closest('.btn-menu'))return;
+  toggleSB();
+});
+
+/* Sidebar — swipe to close (mobile) */
+(function(){
+  let _swStartX=0,_swStartY=0,_swActive=false;
+  document.addEventListener('touchstart',function(e){
+    if(window.innerWidth>768)return;
+    const sb=document.getElementById('sidebar');
+    if(!sb||sb.classList.contains('closed'))return;
+    _swStartX=e.touches[0].clientX;
+    _swStartY=e.touches[0].clientY;
+    _swActive=true;
+  },{passive:true});
+  document.addEventListener('touchend',function(e){
+    if(!_swActive)return;
+    _swActive=false;
+    const dx=e.changedTouches[0].clientX-_swStartX;
+    const dy=Math.abs(e.changedTouches[0].clientY-_swStartY);
+    // Swipe left > 80px and more horizontal than vertical
+    if(dx<-80&&dy<Math.abs(dx)){
+      const sb=document.getElementById('sidebar');
+      if(sb&&!sb.classList.contains('closed'))toggleSB();
+    }
+  },{passive:true});
+})();
 
 async function refreshChats(){
   const r=await apiFetch('/api/chats');const d=await r.json();
@@ -1787,7 +1844,6 @@ async function pasteFromClipboard(){
 let activeTools=new Set();
 
 function activateTool(tool){
-  if(tool==='imagegen'){showToast('Coming soon!','info');return;}
   if(activeTools.has(tool)){
     activeTools.delete(tool);
     showToast(`${tool.charAt(0).toUpperCase()+tool.slice(1)} tool deactivated`,'info');
@@ -1811,7 +1867,7 @@ function renderToolBadges(){
   }
   if(!activeTools.size){wrap.style.display='none';return;}
   wrap.style.display='flex';
-  const names={canvas:'Canvas',search:'Web Search',mindmap:'Mind Map',research:'Deep Research',summarize:'Summarize',code:'Code Execution'};
+  const names={canvas:'Canvas',search:'Web Search',mindmap:'Mind Map',research:'Deep Research',summarize:'Summarize',code:'Code Execution',imagegen:'Image Generation'};
   wrap.innerHTML=[...activeTools].map(t=>`<span class="tool-badge" onclick="activateTool('${t}')">${names[t]||t} <span class="tb-x">×</span></span>`).join('');
 }
 
@@ -3030,7 +3086,8 @@ async function sendMessage(opts){
             // Handle generated images on reload/history
             if(!devRawMode&&data.generated_images?.length){
               for(const gi of data.generated_images){
-                const genHTML=`<div class="img-gen-result"><div class="img-gen-header"><span class="img-gen-icon">🎨</span> Generated Image</div><img src="${gi.url}" alt="${esc(gi.prompt)}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')"><div class="img-gen-prompt">${esc(gi.prompt)}</div></div>`;
+                const giUrl=esc(gi.url);const giPrompt=esc(gi.prompt);
+                const genHTML=`<div class="img-gen-result"><div class="img-gen-header"><span class="img-gen-icon">🎨</span><span class="img-gen-title">Generated Image</span><button class="img-gen-dl" onclick="downloadGenImage('${giUrl}','${giPrompt}')" title="Download PNG"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button></div><img src="${giUrl}" alt="${giPrompt}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')"><div class="img-gen-footer"><div class="img-gen-prompt">${giPrompt}</div><button class="img-gen-dl-full" onclick="downloadGenImage('${giUrl}','${giPrompt}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download PNG</button></div></div>`;
                 const re=new RegExp(`<p>\\s*%%%IMGGEN:${gi.index}%%%\\s*</p>|%%%IMGGEN:${gi.index}%%%`,'g');
                 const before=finalHTML;
                 finalHTML=finalHTML.replace(re,genHTML);
@@ -3161,7 +3218,24 @@ async function sendMessage(opts){
             // AI-generated image arrived — replace loader with the actual image
             if(!devRawMode&&canRender()){
               const loader=contentEl.querySelector(`#imggen-loader-${data.image.index}`);
-              const html=`<div class="img-gen-result"><div class="img-gen-header"><span class="img-gen-icon">🎨</span> Generated Image</div><img src="${data.image.url}" alt="${esc(data.image.prompt)}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')" onerror="this.parentElement.innerHTML='<div class=\\'img-search-fail\\'>Image failed to load</div>'"><div class="img-gen-prompt">${esc(data.image.prompt)}</div></div>`;
+              const safeUrl=esc(data.image.url);
+              const safePrompt=esc(data.image.prompt);
+              const html=`<div class="img-gen-result">`
+                +`<div class="img-gen-header">`
+                +`<span class="img-gen-icon">🎨</span>`
+                +`<span class="img-gen-title">Generated Image</span>`
+                +`<button class="img-gen-dl" onclick="downloadGenImage('${safeUrl}','${safePrompt}')" title="Download PNG">`
+                +`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`
+                +`</button>`
+                +`</div>`
+                +`<img src="${safeUrl}" alt="${safePrompt}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')" onerror="this.parentElement.innerHTML='<div class=\\'img-search-fail\\'>Image failed to load</div>'">`
+                +`<div class="img-gen-footer">`
+                +`<div class="img-gen-prompt">${safePrompt}</div>`
+                +`<button class="img-gen-dl-full" onclick="downloadGenImage('${safeUrl}','${safePrompt}')">`
+                +`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`
+                +` Download PNG</button>`
+                +`</div>`
+                +`</div>`;
               if(loader){
                 const temp=document.createElement('div');
                 temp.innerHTML=html;
@@ -3341,7 +3415,8 @@ function addMsg(role,text,files,extra={}){
   // Render persisted generated images on reload
   if(!devRawMode&&extra.generated_images?.length){
     for(const gi of extra.generated_images){
-      const genHTML=`<div class="img-gen-result"><div class="img-gen-header"><span class="img-gen-icon">🎨</span> Generated Image</div><img src="${gi.url}" alt="${esc(gi.prompt)}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')"><div class="img-gen-prompt">${esc(gi.prompt)}</div></div>`;
+      const giUrl=esc(gi.url);const giPrompt=esc(gi.prompt);
+      const genHTML=`<div class="img-gen-result"><div class="img-gen-header"><span class="img-gen-icon">🎨</span><span class="img-gen-title">Generated Image</span><button class="img-gen-dl" onclick="downloadGenImage('${giUrl}','${giPrompt}')" title="Download PNG"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button></div><img src="${giUrl}" alt="${giPrompt}" class="img-gen-output" onclick="openImageLightbox(this.src,'Generated Image')"><div class="img-gen-footer"><div class="img-gen-prompt">${giPrompt}</div><button class="img-gen-dl-full" onclick="downloadGenImage('${giUrl}','${giPrompt}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download PNG</button></div></div>`;
       const re=new RegExp(`<p>\\s*%%%IMGGEN:${gi.index}%%%\\s*</p>|%%%IMGGEN:${gi.index}%%%`,'g');
       const before=html;
       html=html.replace(re,genHTML);
