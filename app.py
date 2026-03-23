@@ -1192,10 +1192,10 @@ def generate_chat_title(api_key, provider, model_name, base_url, user_text, assi
         "Keep them specific, natural, and easy to scan."
     )
     try:
-        # Always use gemini-2.0-flash-lite for titles if a Google key is available
+        # Always use gemini-2.5-flash-lite for titles if a Google key is available
         g_key = load_settings().get("keys", {}).get("google", "")
         if g_key:
-            raw_title = call_google(g_key, "gemini-2.0-flash-lite", title_system, title_messages)
+            raw_title = call_google(g_key, "gemini-2.5-flash-lite", title_system, title_messages)
         else:
             raw_title = PROVIDERS.get(provider, call_openai)(
                 api_key, model_name, title_system, title_messages, base_url=base_url
