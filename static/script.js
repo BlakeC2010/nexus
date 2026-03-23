@@ -3054,6 +3054,10 @@ async function sendMessage(opts){
             }
             refreshChats();
             // Auto-continue if AI signaled <<<CONTINUE>>> or if the response was truncated
+            // NEVER auto-continue when choice blocks are present — user needs to answer first
+            if(choiceBlocks.length){
+              shouldContinue=false;
+            }
             if(!shouldContinue&&!choiceBlocks.length){
               shouldContinue=_detectTruncation(displayReply);
             }
