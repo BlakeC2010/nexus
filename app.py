@@ -1020,28 +1020,26 @@ ALSO: Always save the todo list to a file using <<<FILE_CREATE: notes/todos.md>>
 When the user adds items to an existing todo list, output the COMPLETE updated todolist block with ALL items (old + new), not just the new ones. This replaces the previous list in the chat.
 
 15. DEEP RESEARCH — You have access to Gemini's built-in Deep Research agent that performs comprehensive web searching, source analysis, and report generation with PDF export.
-You can trigger this AUTONOMOUSLY whenever you judge a query merits deep investigation. You do NOT need the user to ask for it explicitly — use your judgment.
+IMPORTANT: Deep Research is a HEAVY operation. Do NOT trigger it unless the user explicitly asks for it or the "research" tool is active. For normal questions about current events, news, or simple lookups, just use your built-in web search grounding — that is already enabled and handles those automatically. Deep Research is for multi-source investigative reports, NOT quick answers.
 
 To trigger the pipeline, emit this tag in your response:
 <<<DEEP_RESEARCH: detailed research query here>>>
 
-The Gemini Deep Research agent handles everything: web searching, reading sources, analysis, cross-referencing, and comprehensive report writing.
-
-WHEN TO TRIGGER (use your judgment):
-- The user asks for research, a deep dive, investigation, comprehensive analysis, or anything that benefits from gathering real, current information from multiple web sources
-- The topic is complex enough that a thorough multi-source report would genuinely help
-- The user asks about current events, recent developments, or anything where your training data may be outdated
-- The query spans multiple domains and would benefit from cross-referencing diverse sources
+WHEN TO TRIGGER:
+- The user explicitly asks for "deep research", "investigation", "comprehensive report", or "research report"
+- The "research" tool hint is active (the system will tell you)
+- The user opens the Deep Research modal and submits a query
+- The user says something like "research this deeply" or "do a full analysis"
 
 WHEN NOT TO TRIGGER:
-- Simple factual questions you can answer confidently from your knowledge
+- The user asks about news, current events, or simple lookups — use normal web search for those
+- Simple factual questions you can answer from knowledge or web search
 - Casual conversation, greetings, or quick tasks
 - Code writing, debugging, or workspace file operations
 - When the user explicitly says they don't want research
+- ANY question that can be answered with a normal response + web search grounding
 
 HOW TO USE IT:
-- You MAY ask 1-2 quick clarifying questions first if the scope is genuinely unclear (using <<<CHOICES>>> blocks), then trigger on the next response
-- OR you can trigger it immediately if the user's intent is clear — no clarifying questions required
 - Write a detailed, specific research query in the tag — the more specific, the better the results
 - Keep your message brief when triggering — just acknowledge what you're researching and emit the tag
 - DO NOT write research content yourself. DO NOT fake or simulate research. The agent does the real work.
@@ -1749,7 +1747,7 @@ def prepare_chat_turn(chat, payload):
         "active_tools": active_tools,
     }, None, None
 
-def finalize_chat_response(chat, ctx, raw_response):
+def finalize_chat_response(chat, ctx, raw_response, original_raw=None):
     executed = execute_file_operations(raw_response)
     code_results = execute_code_blocks(raw_response)
     new_facts = extract_memory_ops(raw_response)
@@ -1796,6 +1794,7 @@ def finalize_chat_response(chat, ctx, raw_response):
     msg_obj = {
         "role": "model",
         "text": clean,
+        "raw_text": original_raw or raw_response,
         "timestamp": datetime.datetime.now().isoformat(),
         "files_modified": executed,
         "memory_added": new_facts or None,
@@ -3091,6 +3090,7 @@ def chat_message(chat_id):
             return jsonify({"error": f"Rate limit hit — wait a moment and try again. ({err[:120]})", "files": []})
         return jsonify({"error": f"API error: {err}", "files": []})
 
+    original_resp = resp
     resp, research_query = extract_research_trigger(resp)
     resp, image_searches = extract_image_searches(resp)
     resp, image_generations = extract_image_generation(resp)
@@ -3120,7 +3120,7 @@ def chat_message(chat_id):
                 gen_dir.mkdir(parents=True, exist_ok=True)
                 (gen_dir / fname).write_bytes(base64.b64decode(img_b64))
                 gen_results.append({"prompt": entry['prompt'], "index": entry['index'], "url": f"/static/generated/{fname}", "mime": result_or_err})
-    clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, resp)
+    clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, resp, original_raw=original_resp)
     if image_results:
         chat["messages"][-1]["image_results"] = image_results
     if gen_results:
@@ -3216,6 +3216,8 @@ def chat_message_stream(chat_id):
                 think_text = "".join(thinking_pieces).strip()
                 if think_text:
                     raw_text = f"<<<THINKING>>>\n{think_text}\n<<<END_THINKING>>>\n{raw_text}"
+            # Preserve original raw text for dev mode before tag extraction
+            original_raw_text = raw_text
             # Check if AI triggered deep research
             raw_text, research_query = extract_research_trigger(raw_text)
             # Extract image search queries — placeholders will be replaced on the client
@@ -3224,7 +3226,7 @@ def chat_message_stream(chat_id):
             raw_text, image_generations = extract_image_generation(raw_text)
             # Detect <<<CONTINUE>>> BEFORE clean_response strips it
             should_continue = '<<<CONTINUE>>>' in raw_text
-            clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, raw_text)
+            clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, raw_text, original_raw=original_raw_text)
             done_payload = {
                 "type": "done",
                 "reply": clean_wp if (image_searches or image_generations) else clean,
@@ -3825,13 +3827,18 @@ def _run_research_job(job_id, query, api_key):
                 break
 
         if not interaction:
-            push("error", error="Deep Research returned no result. Try again.")
+            push("error", error="Deep Research returned no result. The agent may be temporarily unavailable. Try again.")
             job["status"] = "error"
             return
 
         status = getattr(interaction, "status", "")
-        if status == "failed":
-            push("error", error="Deep Research failed. The query may be too complex or unsupported.")
+        if status in ("failed", "cancelled", "incomplete"):
+            err_msgs = {
+                "failed": "Deep Research failed. The query may be too complex or unsupported.",
+                "cancelled": "Deep Research was cancelled.",
+                "incomplete": "Deep Research ended before finishing. Try a simpler or more focused query.",
+            }
+            push("error", error=err_msgs.get(status, f"Deep Research ended with status: {status}"))
             job["status"] = "error"
             return
 

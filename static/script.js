@@ -3044,14 +3044,25 @@ async function sendMessage(opts){
               // Use pending plan from modal if available
               const planText=window._pendingResearchPlan||undefined;
               window._pendingResearchPlan=null;
+              // Show the AI's text first (don't overwrite it)
               if(canRender()){
                 contentEl.innerHTML=finalHTML;
                 if(data.title&&data.title!=='New Chat')document.getElementById('topTitle').textContent=data.title;
               }
+              // Create a SEPARATE message div for the research card so the AI text stays visible
+              const chatArea=document.getElementById('chatArea');
+              const researchMsgDiv=document.createElement('div');
+              researchMsgDiv.className='msg kairo';
+              const researchContentEl=document.createElement('div');
+              researchContentEl.className='msg-content';
+              researchMsgDiv.innerHTML='<div class="lbl">gyro</div>';
+              researchMsgDiv.appendChild(researchContentEl);
+              chatArea.appendChild(researchMsgDiv);
+              chatArea.scrollTop=chatArea.scrollHeight;
               setChatRunning(targetChatId,false);
               setChatRunning(targetChatId,true,{type:'research'});
               try{
-                await runDeepResearch(rq,contentEl,document.getElementById('chatArea'),planText);
+                await runDeepResearch(rq,researchContentEl,chatArea,planText);
                 await refreshChats();
                 // After research completes, silently auto-continue so the AI can add commentary
                 setChatRunning(targetChatId,false);
@@ -3061,7 +3072,7 @@ async function sendMessage(opts){
                   sendMessage({silent:true,noThinking:true});
                 }catch(_){}
               }catch(e){
-                contentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(e.message||'Research failed.')}</div>`;
+                researchContentEl.innerHTML+=`<div style="color:var(--red);margin-top:12px">${esc(e.message||'Research failed.')}</div>`;
                 setStatus('Research failed.');
                 setChatRunning(targetChatId,false);
               }
@@ -3227,7 +3238,7 @@ function addMsg(role,text,files,extra={}){
       +`<div class="upf-preview">${esc(preview)}${lines.length>3?'\n…':''}</div>`
       +`<div class="upf-full"><pre>${esc(displayText)}</pre></div></div>`;
   } else if(devRawMode&&role==='kairo'){
-    html+='<pre class="dev-raw-log">'+esc(text||'')+'</pre>';
+    html+='<pre class="dev-raw-log">'+esc(extra.raw_text||text||'')+'</pre>';
   } else {
     html+=fmt(displayText);
   }
