@@ -1388,7 +1388,7 @@ def search_images(query, num=8):
     print(f"  [image-search] ALL methods failed for '{query}'")
     return []
 
-def clean_response(text):
+def clean_response(text, keep_img_placeholders=False):
     text = re.sub(r'<<<FILE_CREATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<FILE_UPDATE:\s*.+?>>>.*?<<<END_FILE>>>', '', text, flags=re.DOTALL)
     text = re.sub(r'<<<CODE_EXECUTE:\s*\w+>>>.*?<<<END_CODE>>>', '', text, flags=re.DOTALL)
@@ -1396,8 +1396,9 @@ def clean_response(text):
     text = re.sub(r'<<<DEEP_RESEARCH:\s*.+?>>>', '', text)
     text = re.sub(r'(?:<<<|%%%|<<)IMAGE_SEARCH:\s*.+?(?:>>>|%%%)', '', text)
     text = re.sub(r'<<<CONTINUE>>>', '', text)
-    # Strip image placeholders so saved messages are clean
-    text = re.sub(r'%%%IMGBLOCK:\d+%%%', '', text)
+    # Strip image placeholders so saved messages are clean (unless caller needs them)
+    if not keep_img_placeholders:
+        text = re.sub(r'%%%IMGBLOCK:\d+%%%', '', text)
     return text.strip()
 
 _YT_RE = re.compile(r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([\w-]{11})')
@@ -1671,6 +1672,8 @@ def finalize_chat_response(chat, ctx, raw_response):
         save_memory(ctx["memory"])
 
     clean = clean_response(raw_response)
+    # Build a second version that keeps %%%IMGBLOCK:N%%% placeholders for the frontend
+    clean_with_placeholders = clean_response(raw_response, keep_img_placeholders=True)
 
     # Auto-inject file references from code execution into the response
     if code_results:
@@ -1727,7 +1730,7 @@ def finalize_chat_response(chat, ctx, raw_response):
     # Track token usage for guests (estimate: 1 token ≈ 4 chars)
     if session.get("guest") and not session.get("user_id"):
         _add_guest_tokens((len(ctx.get("user_text", "")) + len(clean)) // 4)
-    return clean, executed, new_facts, code_results
+    return clean, executed, new_facts, code_results, clean_with_placeholders
 
 # ─── Context Helpers ────────────────────────────────────────────────────────
 
@@ -3014,11 +3017,11 @@ def chat_message(chat_id):
                 entry, imgs = fut.result()
                 if imgs:
                     image_results.append({"query": entry['query'], "images": imgs, "index": entry['index'], "count": entry['count']})
-    clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, resp)
+    clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, resp)
     if image_results:
         chat["messages"][-1]["image_results"] = image_results
         save_chat(chat)
-    result = {"reply": clean, "files": executed, "memory_added": new_facts}
+    result = {"reply": clean_wp if image_searches else clean, "files": executed, "memory_added": new_facts}
     if code_results:
         result["code_results"] = code_results
     if research_query:
@@ -3111,10 +3114,10 @@ def chat_message_stream(chat_id):
             raw_text, image_searches = extract_image_searches(raw_text)
             # Detect <<<CONTINUE>>> BEFORE clean_response strips it
             should_continue = '<<<CONTINUE>>>' in raw_text
-            clean, executed, new_facts, code_results = finalize_chat_response(chat, ctx, raw_text)
+            clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, raw_text)
             done_payload = {
                 "type": "done",
-                "reply": clean,
+                "reply": clean_wp if image_searches else clean,
                 "files": executed,
                 "memory_added": new_facts,
                 "title": chat.get("title", "New Chat"),

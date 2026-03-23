@@ -2975,7 +2975,12 @@ async function sendMessage(opts){
                 const loaderHTML=`<div class="img-grid-wrap img-loading-placeholder" id="${loaderId}" data-img-index="${pi.index}"><div class="img-grid-header"><span class="img-car-icon">🖼</span> Searching images for "${esc(pi.query)}"...</div><div class="img-loading-shimmer"><div class="img-shimmer-bar"></div><div class="img-shimmer-bar"></div><div class="img-shimmer-bar short"></div></div></div>`;
                 // Replace %%%IMGBLOCK:N%%% placeholders with loaders
                 const re=new RegExp(`<p>\\s*%%%IMGBLOCK:${pi.index}%%%\\s*</p>|%%%IMGBLOCK:${pi.index}%%%`,'g');
+                const before=finalHTML;
                 finalHTML=finalHTML.replace(re,loaderHTML);
+                // Fallback: if placeholder wasn't found in rendered HTML, append loader
+                if(finalHTML===before){
+                  finalHTML+=loaderHTML;
+                }
               }
             }
 
