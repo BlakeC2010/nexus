@@ -947,6 +947,8 @@ IMAGE GENERATION RULES:
 - You can use MULTIPLE <<<IMAGE_GENERATE>>> tags in one response
 - Always accompany generated images with descriptive text about what you created
 - For best results, describe the image as if you're art-directing a professional designer
+- NEVER use <<<CONTINUE>>> in the same response as <<<IMAGE_GENERATE>>>. The system needs to finish generating before any continuation.
+- If image generation fails, the system will notify you automatically. Do NOT retry on your own — inform the user about the failure instead.
 
 11. ANALYZE YOUTUBE VIDEOS — when the user shares a YouTube link, you can watch/analyze the video content and discuss it in detail. The video is provided to you directly.
 12. Interactive questions — you can ask the user multiple-choice questions they can click to answer (they can also type their own response). Use this when it genuinely helps move the conversation forward:
@@ -1093,6 +1095,7 @@ You have a powerful multi-turn continuation system. Use it aggressively for any 
   * Message 2: Find images with <<<IMAGE_SEARCH>>> → <<<CONTINUE>>>
   * Message 3: Create mind map with ```mermaid → <<<CONTINUE>>>
   * Message 4: Generate PDF with <<<CODE_EXECUTE: python>>> (done)
+- IMPORTANT: The system will wait for all generative operations (image searches, image generation) to complete before allowing continuation. You CAN use <<<CONTINUE>>> with <<<IMAGE_SEARCH>>> — the system handles the timing. But NEVER use <<<CONTINUE>>> with <<<IMAGE_GENERATE>>> — image generation is slow and the system will handle continuation for you.
 - ALWAYS end with <<<CONTINUE>>> if you have more work to do. Only omit it when you are truly finished.
 - If you're about to do code execution, mind maps, image searches, or file operations AND you've already written substantial text, use <<<CONTINUE>>> to split them into separate messages. Don't try to cram everything into one giant response.
 - Even if you're unsure whether you need to continue, err on the side of using <<<CONTINUE>>> — it's better to send an extra message than to leave work unfinished.
@@ -1353,7 +1356,7 @@ def generate_image_gemini(prompt, aspect_ratio="1:1", api_key=None):
             return None, "No Google API key configured"
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-2.5-flash-image",
             contents=[prompt],
             config=types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE'],
@@ -3226,6 +3229,9 @@ def chat_message_stream(chat_id):
             raw_text, image_generations = extract_image_generation(raw_text)
             # Detect <<<CONTINUE>>> BEFORE clean_response strips it
             should_continue = '<<<CONTINUE>>>' in raw_text
+            # BLOCK continue if there are pending generative operations (images, image gen)
+            # The frontend will decide whether to continue AFTER all ops complete
+            has_pending_ops = bool(image_searches or image_generations)
             clean, executed, new_facts, code_results, clean_wp = finalize_chat_response(chat, ctx, raw_text, original_raw=original_raw_text)
             done_payload = {
                 "type": "done",
@@ -3234,8 +3240,11 @@ def chat_message_stream(chat_id):
                 "memory_added": new_facts,
                 "title": chat.get("title", "New Chat"),
             }
-            if should_continue:
+            if should_continue and not has_pending_ops:
                 done_payload["should_continue"] = True
+            elif should_continue and has_pending_ops:
+                # Tell client: continue was requested but ops are pending — wait for them
+                done_payload["continue_after_ops"] = True
             if code_results:
                 done_payload["code_results"] = code_results
             if research_query:
@@ -3307,6 +3316,13 @@ def chat_message_stream(chat_id):
                 if gen_results:
                     chat["messages"][-1]["generated_images"] = gen_results
                     save_chat(chat)
+                # Signal that all generation operations are complete
+                total_ops = len(image_generations) + len(image_searches) if image_searches else len(image_generations)
+                total_success = len(gen_results) + (len(image_results) if image_searches else 0)
+                yield event({"type": "gen_ops_complete", "success": total_success > 0, "total": total_ops, "succeeded": total_success, "failed": total_ops - total_success})
+            # If only image searches (no image generations), send signal after searches
+            elif image_searches:
+                yield event({"type": "gen_ops_complete", "success": len(image_results) > 0, "total": len(image_searches), "succeeded": len(image_results), "failed": len(image_searches) - len(image_results)})
         except Exception as e:
             err = str(e)
             if any(w in err.lower() for w in ("429", "quota", "rate")):

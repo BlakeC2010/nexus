@@ -2796,6 +2796,8 @@ async function sendMessage(opts){
     const reader=response.body.getReader();
     const decoder=new TextDecoder();
     let buffer='',fullText='',thinkText='',isThinking=false;
+    let _pendingContinueAfterOps=false;
+    let _genFailures=[];
 
     // Create a live thinking panel (collapsed by default — click to expand)
     let thinkPanel=null;
@@ -3106,7 +3108,14 @@ async function sendMessage(opts){
             if(choiceBlocks.length){
               shouldContinue=false;
             }
-            if(!shouldContinue&&!choiceBlocks.length){
+            // If gen ops are pending, defer continue decision until gen_ops_complete event
+            if(data.continue_after_ops){
+              // Don't continue yet — wait for gen_ops_complete event
+              _pendingContinueAfterOps=true;
+              shouldContinue=false;
+              setStatus('Generating content...');
+            }
+            if(!shouldContinue&&!choiceBlocks.length&&!_pendingContinueAfterOps){
               shouldContinue=_detectTruncation(displayReply);
             }
             if(shouldContinue&&_continueCount<_MAX_CONTINUES){
@@ -3115,7 +3124,7 @@ async function sendMessage(opts){
               setTimeout(()=>{
                 sendMessage({silent:true,noThinking:true,isContinue:true,message:'Continue where you left off. Pick up exactly where you stopped.'});
               },600);
-            }else{
+            }else if(!_pendingContinueAfterOps){
               _continueCount=0;
               setStatus('Done. Ask a follow-up or start something new.');
             }
@@ -3139,6 +3148,7 @@ async function sendMessage(opts){
             }
           }else if(data.type==='image_failed'){
             // Async image search failed — replace loader with error
+            _genFailures.push({type:'image_search',query:data.query||''});
             if(!devRawMode&&canRender()){
               const loader=contentEl.querySelector(`#img-loader-${data.index}`);
               if(loader){
@@ -3161,6 +3171,7 @@ async function sendMessage(opts){
             }
           }else if(data.type==='image_gen_failed'){
             // Image generation failed
+            _genFailures.push({type:'image_gen',prompt:data.prompt||'',error:data.error||''});
             if(!devRawMode&&canRender()){
               const loader=contentEl.querySelector(`#imggen-loader-${data.index}`);
               if(loader){
@@ -3168,6 +3179,40 @@ async function sendMessage(opts){
                 loader.classList.remove('img-loading-placeholder');
                 loader.classList.add('img-search-fail-block');
               }
+            }
+          }else if(data.type==='gen_ops_complete'){
+            // All generative operations (image gen, image search) are done
+            if(_genFailures.length>0){
+              // Some ops failed — notify the AI so it can report to user
+              const failMsgs=_genFailures.map(f=>{
+                if(f.type==='image_gen')return `Image generation failed for "${f.prompt}": ${f.error}`;
+                return `Image search failed for "${f.query}"`;
+              });
+              setChatRunning(targetChatId,false);
+              _continueCount=0;
+              _pendingContinueAfterOps=false;
+              setStatus('Some operations failed.');
+              try{
+                const inp=document.getElementById('msgInput');
+                inp.value=`[SYSTEM] The following operations failed:\n${failMsgs.join('\n')}\n\nPlease acknowledge the failures to the user. Do NOT retry automatically. Let them know what happened and suggest they try again if they want.`;
+                sendMessage({silent:true,noThinking:true});
+              }catch(_){}
+            }else if(_pendingContinueAfterOps){
+              // All ops succeeded — now safe to continue
+              _pendingContinueAfterOps=false;
+              if(_continueCount<_MAX_CONTINUES){
+                _continueCount++;
+                setStatus(`Continuing... (${_continueCount})`);
+                setTimeout(()=>{
+                  sendMessage({silent:true,noThinking:true,isContinue:true,message:'Continue where you left off. Pick up exactly where you stopped.'});
+                },600);
+              }else{
+                _continueCount=0;
+                setStatus('Done. Ask a follow-up or start something new.');
+              }
+            }else{
+              // No pending continue, just mark done
+              setStatus('Done. Ask a follow-up or start something new.');
             }
           }
         }catch(e){}
